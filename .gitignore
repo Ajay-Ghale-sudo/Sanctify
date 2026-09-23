@@ -43,11 +43,14 @@
 *.DotSettings.user
 # Jetbrains Rider project folder (not using Rider)
 .idea/
+# VS Code workspace settings
+.vscode/
 
-# Claude Code: personal settings, and skill junctions that point at absolute local paths
-# (skill content lives in .agents/ and is restored from skills-lock.json)
+# Claude Code: personal settings and locally installed agent skills
 .claude/settings.local.json
 /.claude/skills
+/.agents/
+/skills-lock.json
 
 # Visual Studio cache directory
 .vs/
