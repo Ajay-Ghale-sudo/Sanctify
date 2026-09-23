@@ -147,6 +147,8 @@ Packages/packages-lock.json linguist-generated
 *.dll                   lfs
 *.pdb                   lfs
 *.so                    lfs
+# Steam Audio's macOS binary has no extension, so the rules above miss it
+**/phonon.bundle/Contents/MacOS/phonon lfs
 
 # Fonts
 *.otf                   lfs

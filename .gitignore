@@ -41,6 +41,17 @@
 /[Aa]ssets/Plugins/Editor/JetBrains*
 # Jetbrains Rider personal-layer settings
 *.DotSettings.user
+# Jetbrains Rider per-user workspace state
+.idea/**/workspace.xml
+.idea/**/contentModel.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/shelf/
+
+# Claude Code: personal settings, and skill junctions that point at absolute local paths
+# (skill content lives in .agents/ and is restored from skills-lock.json)
+.claude/settings.local.json
+/.claude/skills
 
 # Visual Studio cache directory
 .vs/
