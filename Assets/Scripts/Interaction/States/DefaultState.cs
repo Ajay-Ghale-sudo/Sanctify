@@ -27,7 +27,7 @@ namespace Sanctify.Interaction
                 return;
 
             var prop = hit.collider.GetComponentInParent<Interactable>();
-            if (prop == null || !prop.CanFocus(hit.distance))
+            if (prop == null || !prop.CanFocus(Interactor, hit.distance))
                 return;
 
             FocusProp = prop;

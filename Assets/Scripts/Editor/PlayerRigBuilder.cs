@@ -24,6 +24,9 @@ namespace Sanctify.Editor
     {
         const string SettingsFolder = "Assets/Settings/Player";
         const string InteractionSettingsFolder = "Assets/Settings/Interaction";
+        const string InteractionArtFolder = "Assets/Art/Interaction";
+        // URP's decal graph with angle fade turned on, so the shadow stays off walls.
+        const string HeldShadowShaderPath = InteractionArtFolder + "/SG_HeldShadowDecal.shadergraph";
         const float CapsuleHeight = 1.8f;
         const float CapsuleRadius = 0.35f;
         const float EyeHeight = 1.65f;
@@ -96,6 +99,8 @@ namespace Sanctify.Editor
             SetReference(interactor, "grabSettings", grabSettings);
             root.AddComponent<PlayerStance>();
             root.AddComponent<PlayerInteractMode>();
+            var heldShadow = root.AddComponent<HeldObjectShadow>();
+            SetReference(heldShadow, "material", GetOrCreateHeldShadowMaterial());
 
             var controller = root.AddComponent<PlayerController>();
             SetReference(controller, "cameraRig", rig);
@@ -248,16 +253,20 @@ namespace Sanctify.Editor
         public static void UpgradePlayerRigs()
         {
             var grabSettings = GetOrCreateAsset<PlayerGrabSettings>("SO_PlayerGrab");
+            var heldShadowMaterial = GetOrCreateHeldShadowMaterial();
 
             foreach (var controller in Object.FindObjectsByType<PlayerController>())
             {
                 var root = controller.gameObject;
                 AddIfMissing<PlayerStance>(root);
                 AddIfMissing<PlayerInteractMode>(root);
+                AddIfMissing<HeldObjectShadow>(root);
 
                 var interactor = root.GetComponent<PlayerInteractor>();
                 if (interactor != null)
                     SetReferenceIfEmpty(interactor, "grabSettings", grabSettings);
+                if (heldShadowMaterial != null)
+                    SetReferenceIfEmpty(root.GetComponent<HeldObjectShadow>(), "material", heldShadowMaterial);
 
                 EditorSceneManager.MarkSceneDirty(root.scene);
             }
@@ -376,6 +385,67 @@ namespace Sanctify.Editor
             AssetDatabase.CreateAsset(asset, path);
             AssetDatabase.SaveAssets();
             return asset;
+        }
+
+        /// <summary>
+        /// Decal material for <see cref="HeldObjectShadow"/>, with a generated soft blob for its
+        /// texture. Made once; later edits to the material or texture are kept.
+        /// </summary>
+        static Material GetOrCreateHeldShadowMaterial()
+        {
+            string path = $"{InteractionArtFolder}/M_HeldShadow.mat";
+            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (existing != null)
+                return existing;
+
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(HeldShadowShaderPath);
+            if (shader == null)
+            {
+                Debug.LogError($"No decal shader at {HeldShadowShaderPath}, so held objects will cast no shadow.");
+                return null;
+            }
+
+            EnsureFolder(InteractionArtFolder);
+            var material = new Material(shader) { enableInstancing = true };
+            material.SetTexture("Base_Map", GetOrCreateBlobTexture($"{InteractionArtFolder}/T_HeldShadow.png"));
+            material.SetFloat("Normal_Blend", 0f); // darken only; leave the surface's normals alone
+            AssetDatabase.CreateAsset(material, path);
+            AssetDatabase.SaveAssets();
+            return material;
+        }
+
+        /// <summary>Black, with a soft round falloff in alpha that reaches zero before the edges.</summary>
+        static Texture2D GetOrCreateBlobTexture(string path)
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (existing != null)
+                return existing;
+
+            const int size = 128;
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var pixels = new Color32[size * size];
+            float radius = size * 0.5f;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float dx = (x + 0.5f - radius) / radius;
+                    float dy = (y + 0.5f - radius) / radius;
+                    float falloff = Mathf.Clamp01(1f - (dx * dx + dy * dy));
+                    pixels[y * size + x] = new Color32(0, 0, 0, (byte)Mathf.RoundToInt(falloff * falloff * 255f));
+                }
+            }
+            texture.SetPixels32(pixels);
+            System.IO.File.WriteAllBytes(path, texture.EncodeToPNG());
+            Object.DestroyImmediate(texture);
+
+            AssetDatabase.ImportAsset(path);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            importer.alphaIsTransparency = true;
+            importer.wrapMode = TextureWrapMode.Clamp;
+            importer.textureCompression = TextureImporterCompression.CompressedHQ; // smooth gradient, no banding
+            importer.SaveAndReimport();
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
         }
 
         static void EnsureFolder(string path)

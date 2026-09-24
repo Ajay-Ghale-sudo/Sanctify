@@ -20,6 +20,9 @@ namespace Sanctify.Interaction
 
         void Awake() => _body = GetComponent<Rigidbody>();
 
+        // Carrying is part of the cursor mode: outside it, loose objects aren't focused or grabbed.
+        protected override bool IsUsableBy(PlayerInteractor interactor) => interactor.CursorMode;
+
         // Prefer the body the ray hit, so a prop made of jointed parts is held by the part you grabbed.
         protected override void HandleInteract(PlayerInteractor interactor, Rigidbody body, Vector3 hitPoint)
             => Begin(interactor, InteractionStateId.Grab, body != null ? body : _body, hitPoint);

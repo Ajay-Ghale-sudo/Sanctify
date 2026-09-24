@@ -53,7 +53,11 @@ namespace Sanctify.Characters.Player
 
         /// <param name="lookInput">x = yaw (-1 left, +1 right), y = pitch (-1 down, +1 up). Pass zero to coast to a stop.</param>
         /// <param name="peekInput">Right stick, x = right, y = up. Pass zero to return to centre.</param>
-        public void Tick(float deltaTime, Vector2 lookInput, Vector2 peekInput)
+        /// <param name="rawPitch">
+        /// Take pitch input as given, without the digital snapping or inversion meant for the pitch
+        /// buttons. For input that's already a smooth direction, like the interact-mode edge turn.
+        /// </param>
+        public void Tick(float deltaTime, Vector2 lookInput, Vector2 peekInput, bool rawPitch)
         {
             if (settings == null || deltaTime <= 0f)
                 return;
@@ -62,10 +66,13 @@ namespace Sanctify.Characters.Player
 
             float yawInput = lookInput.x;
             float pitchInput = lookInput.y;
-            if (settings.digitalPitch)
-                pitchInput = Mathf.Abs(pitchInput) >= settings.digitalThreshold ? Mathf.Sign(pitchInput) : 0f;
-            if (settings.invertPitch)
-                pitchInput = -pitchInput;
+            if (!rawPitch)
+            {
+                if (settings.digitalPitch)
+                    pitchInput = Mathf.Abs(pitchInput) >= settings.digitalThreshold ? Mathf.Sign(pitchInput) : 0f;
+                if (settings.invertPitch)
+                    pitchInput = -pitchInput;
+            }
 
             float yawTop = settings.yawSpeed;
             float pitchTop = settings.yawSpeed * settings.pitchToYawRatio;

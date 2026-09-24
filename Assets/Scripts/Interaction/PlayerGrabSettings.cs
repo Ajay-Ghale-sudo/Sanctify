@@ -10,15 +10,15 @@ namespace Sanctify.Interaction
     [CreateAssetMenu(fileName = "SO_PlayerGrab", menuName = "Sanctify/Player/Grab Settings")]
     public sealed class PlayerGrabSettings : ScriptableObject
     {
-        [Header("Pull (acts on the point you grabbed, per kg)")]
+        [Header("Pull (acts on the point you grabbed, per kg of its effective mass)")]
         [Tooltip("Spring pulling the grabbed point toward the cursor. Lower = looser, laggier following.")]
         [Min(0f)] public float stiffness = 100f;
-        [Tooltip("Damping on the grabbed point's velocity relative to the player. Walking carries objects without lag; dragging and turning leave them trailing by roughly Damping / Stiffness seconds. Keep Damping × fixed timestep well under 1, or objects grabbed near a corner buzz.")]
+        [Tooltip("Damping on the grabbed point's velocity relative to the player. Walking carries objects without lag; dragging and turning leave them trailing by roughly Damping / Stiffness seconds. Keep Damping × fixed timestep well under 1, or the point overshoots every step and buzzes.")]
         [Min(0f)] public float damping = 12f;
-        [Tooltip("Strongest pull, in newtons. Heavy objects hit this and trail further behind the cursor.")]
+        [Tooltip("Strongest pull, in newtons. Heavy objects hit this and trail further behind the cursor. Their weight is carried separately, so they lag rather than drop.")]
         [Min(0f)] public float maxPullForce = 80f;
-        [Tooltip("Angular damping while held, so objects swinging from the grab point settle.")]
-        [Min(0f)] public float heldAngularDamping = 2f;
+        [Tooltip("How quickly a held object stops swinging and twisting, per second. Acts about the grabbed point, where the swing is, rather than about the centre of mass like a Rigidbody's angular damping. The swing dies to a tenth in about 4.6 / this seconds.")]
+        [Min(0f)] public float swingDamping = 6f;
 
         [Header("Orientation (Hold Orientation props only)")]
         [Tooltip("How quickly the object turns back to its held angle: roughly 1 / seconds.")]
@@ -35,6 +35,8 @@ namespace Sanctify.Interaction
         [Min(0f)] public float grabPull = 0.08f;
         [Tooltip("The held object's goal is kept at least this far outside the player's capsule, sideways, so it can't be dragged into the camera.")]
         [Min(0f)] public float keepOutMargin = 0.15f;
+        [Tooltip("Seconds the grabbed point can be out of sight before the object is dropped, so passing behind something thin doesn't end the grab.")]
+        [Min(0f)] public float lineOfSightGrace = 0.5f;
 
         [Header("Throw")]
         [Tooltip("Impulse given to a thrown object, in N·s. Launch speed is this × the prop's Throw Multiplier ÷ its mass, so weight decides distance.")]

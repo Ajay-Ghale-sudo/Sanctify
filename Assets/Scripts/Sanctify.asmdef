@@ -3,6 +3,7 @@
     "rootNamespace": "Sanctify",
     "references": [
         "Unity.InputSystem",
+        "Unity.RenderPipelines.Universal.Runtime",
         "UnityEngine.UI"
     ],
     "includePlatforms": [],

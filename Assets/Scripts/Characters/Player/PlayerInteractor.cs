@@ -39,6 +39,8 @@ namespace Sanctify.Characters.Player
         [SerializeField, Min(0f)] float debugDrawSeconds = 1.5f;
 
         static readonly Vector2 ViewCentre = new(0.5f, 0.5f);
+        // Sight lines stop this short of their target, so a surface touching it doesn't block.
+        const float SightMargin = 0.02f;
 
         readonly RaycastHit[] _hits = new RaycastHit[8];
         readonly Dictionary<InteractionStateId, InteractionState> _states = new();
@@ -52,7 +54,7 @@ namespace Sanctify.Characters.Player
         /// </summary>
         public Vector2 CursorViewport { get; set; } = ViewCentre;
 
-        /// <summary>True while the cursor interact mode is on. Grabbing toggles instead of holding then.</summary>
+        /// <summary>True while the cursor interact mode is on. Loose objects can only be grabbed then.</summary>
         public bool CursorMode { get; set; }
 
         public Transform RayOrigin => rayOrigin;
@@ -266,6 +268,55 @@ namespace Sanctify.Characters.Player
             }
 
             return found;
+        }
+
+        /// <summary>
+        /// Whether nothing solid lies between two points. The player, triggers and
+        /// <paramref name="ignoredBody"/> (usually whatever is being held) don't block.
+        /// </summary>
+        public bool HasLineOfSight(Vector3 from, Vector3 to, Rigidbody ignoredBody)
+        {
+            Vector3 delta = to - from;
+            float length = delta.magnitude;
+            return length <= SightMargin || !CastSolid(new Ray(from, delta / length), length - SightMargin, ignoredBody, out _);
+        }
+
+        /// <summary>
+        /// Nearest solid hit along a ray. The player, triggers and <paramref name="ignoredBody"/>
+        /// (usually whatever is being held) are passed through.
+        /// </summary>
+        public bool CastSolid(Ray ray, float distance, Rigidbody ignoredBody, out RaycastHit nearest)
+        {
+            nearest = default;
+            int count = Physics.RaycastNonAlloc(ray, _hits, distance, mask, QueryTriggerInteraction.Ignore);
+            float nearestDistance = float.MaxValue;
+            for (int i = 0; i < count; i++)
+            {
+                ref RaycastHit hit = ref _hits[i];
+                if (hit.distance >= nearestDistance)
+                    continue;
+                Collider collider = hit.collider;
+                if (ignoredBody != null && collider.attachedRigidbody == ignoredBody)
+                    continue;
+                if (collider.transform.IsChildOf(transform))
+                    continue;
+                nearestDistance = hit.distance;
+                nearest = hit;
+            }
+            return nearestDistance < float.MaxValue;
+        }
+
+        /// <summary>Where a world point shows in the rendered view, 0..1 with y up. False if it's behind the camera.</summary>
+        public bool TryGetViewportPoint(Vector3 world, out Vector2 viewport)
+        {
+            viewport = ViewCentre;
+            if (_camera == null)
+                return false;
+            Vector3 point = _camera.WorldToViewportPoint(world);
+            if (point.z <= 0f)
+                return false;
+            viewport = new Vector2(point.x, point.y);
+            return true;
         }
 
         void DrawPressDebug()

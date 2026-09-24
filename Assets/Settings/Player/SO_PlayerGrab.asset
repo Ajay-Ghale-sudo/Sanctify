@@ -12,15 +12,20 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 51d0693cd091f6c4aa1fe35c901723d6, type: 3}
   m_Name: SO_PlayerGrab
   m_EditorClassIdentifier: Sanctify::Sanctify.Interaction.PlayerGrabSettings
-  positionP: 400
-  positionD: 40
-  maxForce: 250
-  spinGain: 100
+  stiffness: 100
+  damping: 12
+  maxPullForce: 80
+  swingDamping: 6
+  orientationResponse: 8
   maxSpin: 6
-  rotationP: 40
-  rotationD: 0.4
+  spinCatchUp: 30
   maxAngularAcceleration: 200
   grabPull: 0.08
+  keepOutMargin: 0.15
+  lineOfSightGrace: 0.5
+  throwStrength: 8
+  maxThrowSpeed: 14
+  throwLoft: 8
   maxReleaseSpeed: 2
   maxReleaseAngularSpeed: 4
   slowdownStartMass: 2

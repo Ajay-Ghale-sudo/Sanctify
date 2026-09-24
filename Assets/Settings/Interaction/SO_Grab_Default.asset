@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4670c2918eb6aef4c97ef8a96adf4d63, type: 3}
   m_Name: SO_Grab_Default
   m_EditorClassIdentifier: Sanctify::Sanctify.Interaction.GrabData
-  useRotation: 1
+  holdOrientation: 0
   useFixedDepth: 0
   depth: 1
   minDepth: 0.6
@@ -23,4 +23,4 @@ MonoBehaviour:
   massMultiplier: 1
   forceMultiplier: 1
   torqueMultiplier: 1
-  throwImpulse: 0
+  throwMultiplier: 1

@@ -13,10 +13,16 @@ MonoBehaviour:
   m_Name: SO_PlayerLook
   m_EditorClassIdentifier: Sanctify::Sanctify.Characters.Player.PlayerLookSettings
   yawSpeed: 100
-  pitchSpeed: 70
+  pitchToYawRatio: 0.667
   accelerationTime: 0.18
   decelerationTime: 0.12
   stickCurve: 1.5
+  digitalPitch: 1
+  digitalThreshold: 0.4
+  peekMaxDegrees: 5
+  peekOutSharpness: 14
+  peekReturnSharpness: 35
+  invertPeekY: 0
   pitchMin: -55
   pitchMax: 55
   invertPitch: 0

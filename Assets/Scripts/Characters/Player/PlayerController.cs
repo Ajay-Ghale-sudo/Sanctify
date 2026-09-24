@@ -10,7 +10,7 @@ namespace Sanctify.Characters.Player
     ///
     ///   Update       read input → interact mode → look → actions → interaction tick   (frame rate)
     ///   FixedUpdate  stance → movement + motor → interaction forces                    (fixed step, deterministic)
-    ///   LateUpdate   camera rig composes the interpolated pose → interaction follows it
+    ///   LateUpdate   camera rig composes the interpolated pose → interaction, drawn cursor and held-object shadow follow it
     ///
     /// The cursor interact mode reshapes look and move input first (see <see cref="PlayerInteractMode"/>),
     /// then look, move and action input pass through the current interaction state, which
@@ -40,6 +40,7 @@ namespace Sanctify.Characters.Player
         PlayerInteractor _interactor;
         PlayerStance _stance;
         PlayerInteractMode _interactMode;
+        HeldObjectShadow _heldShadow; // optional: without it, held objects cast no shadow
 
         public PlayerInputReader InputReader => _input;
         public PlayerControlLock Controls => _controls;
@@ -50,6 +51,7 @@ namespace Sanctify.Characters.Player
         public PlayerInteractor Interactor => _interactor;
         public PlayerStance Stance => _stance;
         public PlayerInteractMode InteractMode => _interactMode;
+        public HeldObjectShadow HeldShadow => _heldShadow;
         public PlayerCameraRig CameraRig => cameraRig;
 
         void Awake()
@@ -63,6 +65,7 @@ namespace Sanctify.Characters.Player
             _interactor = GetComponent<PlayerInteractor>();
             _stance = GetComponent<PlayerStance>();
             _interactMode = GetComponent<PlayerInteractMode>();
+            _heldShadow = GetComponent<HeldObjectShadow>();
 
             if (cameraRig == null)
                 cameraRig = GetComponentInChildren<PlayerCameraRig>();
@@ -95,7 +98,8 @@ namespace Sanctify.Characters.Player
             }
             if (!_interactor.RouteLook(lookInput))
                 lookInput = Vector2.zero;
-            _look.Tick(dt, lookInput, peekInput);
+            // In interact mode pitch comes only from the edge turn, which is already smooth.
+            _look.Tick(dt, lookInput, peekInput, rawPitch: _interactMode.IsActive);
 
             if (canAct)
             {
@@ -138,8 +142,8 @@ namespace Sanctify.Characters.Player
 
             bool canMove = _input.isActiveAndEnabled && _controls.IsAllowed(PlayerControls.Movement);
             Vector2 moveInput = canMove ? _input.Move : Vector2.zero;
-            if (_interactMode.IsActive)
-                moveInput.x = 0f; // the bumpers are held-object depth now
+            if (_interactMode.BumpersMoveHeldObject)
+                moveInput.x = 0f;
             if (!_interactor.RouteMove(moveInput))
                 moveInput = Vector2.zero;
 
@@ -155,6 +159,9 @@ namespace Sanctify.Characters.Player
                 cameraRig.Tick(dt);
             // After the rig, so anything that follows the camera uses this frame's final pose.
             _interactor.LateTick(dt);
+            _interactMode.LateTick(dt);
+            if (_heldShadow != null)
+                _heldShadow.LateTick();
         }
     }
 }
