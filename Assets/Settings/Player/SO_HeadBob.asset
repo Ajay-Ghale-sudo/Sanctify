@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 02f8b7e558d00ff48bb928321af8ab0e, type: 3}
+  m_Name: SO_HeadBob
+  m_EditorClassIdentifier: Sanctify::Sanctify.Cameras.HeadBobSettings
+  walkVertical: 0.02
+  walkLateral: 0.012
+  walkRollDegrees: 0.6
+  walkPitchDegrees: 0.3
+  runVertical: 0.05
+  runLateral: 0.03
+  runRollDegrees: 1.5
+  runPitchDegrees: 0.8
+  speedForFullBob: 0.6
+  blendSharpness: 10
+  breathsPerMinute: 14
+  breathVertical: 0.006
+  breathLateral: 0.002
+  breathPitchDegrees: 0.25
