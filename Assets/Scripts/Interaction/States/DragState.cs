@@ -26,8 +26,10 @@ namespace Sanctify.Interaction
     /// take hold. If it tips below where it was grabbed, they let it go down rather than prop it up.
     ///
     /// The body stays solid to the player. The state ends itself if the object is left behind,
-    /// or if it stays out of sight too long. Only reachable in the cursor mode (see
-    /// <see cref="PhysicsProp"/>), where Interact toggles, as for grabbing.
+    /// or if it stays out of sight too long. Loose objects are only reachable in the cursor mode
+    /// (see <see cref="PhysicsProp"/>); a <see cref="Door"/> by its handle in either. Interact
+    /// toggles, as for grabbing. Jointed bodies get no lift and a weaker push, so a heavy prop
+    /// wedged against a door holds it.
     /// </summary>
     public sealed class DragState : HeldState
     {
@@ -65,6 +67,8 @@ namespace Sanctify.Interaction
         float _liftStiffness;
         float _liftDamping;
         float _liftCap;
+        float _strength;
+        bool _jointed;           // hinged or slid: a door, say
         Vector2 _move;
         float _breakDistance;
         float _unseenTime;
@@ -107,6 +111,12 @@ namespace Sanctify.Interaction
             _liftDamping = 2f * LiftDampingRatio * Mathf.Sqrt(_liftStiffness * mass);
             _liftCap = Mathf.Min(_settings.maxDragLift, MaxLiftShareOfWeight * mass * Physics.gravity.magnitude)
                      * LiftShare(_restHeight, player.up);
+
+            // ponytail: the joint holds the point's path, so no lift or drift damping; revisit if a jointed prop needs lifting
+            _jointed = Body.TryGetComponent(out Joint _);
+            if (_jointed)
+                _liftCap = 0f;
+            _strength = _jointed ? _settings.jointedDragStrength : _settings.dragStrength;
 
             _grip = 0f;
             _effort = 0f;
@@ -221,13 +231,16 @@ namespace Sanctify.Interaction
             // Push away along the line, or pull back along it, easing off near the pace.
             Vector3 direction = _effort >= 0f ? line : -line;
             float along = Vector3.Dot(flatVelocity, direction);
-            float strength = Mathf.Abs(_effort) * _settings.dragStrength * Mathf.Clamp01((_pace - along) / PaceTaper);
+            float strength = Mathf.Abs(_effort) * _strength * Mathf.Clamp01((_pace - along) / PaceTaper);
             Vector3 force = direction * strength;
 
             // The hands keep the point on the line to the player; the rest of the object is free
             // to swing and tip about it.
-            Vector3 sideways = flatVelocity - line * Vector3.Dot(flatVelocity, line);
-            force += Vector3.ClampMagnitude(-sideways * (DriftDamping * Body.mass), _settings.dragStrength);
+            if (!_jointed)
+            {
+                Vector3 sideways = flatVelocity - line * Vector3.Dot(flatVelocity, line);
+                force += Vector3.ClampMagnitude(-sideways * (DriftDamping * Body.mass), _settings.dragStrength);
+            }
 
             force += up * Lift(point, pointVelocity, player.position, up);
             Body.AddForceAtPosition(force, point);

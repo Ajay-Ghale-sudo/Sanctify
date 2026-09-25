@@ -23,10 +23,13 @@ namespace Sanctify.Interaction
         [SerializeField] Handling handling = Handling.ByMass;
         [Tooltip("How it's held and whether it can be thrown, when lifted. Empty uses stock values, which can't be thrown.")]
         [SerializeField] GrabData grab;
+        [Tooltip("Knocks a Door off its hinges when it hits one faster than the door's Break Speed, e.g. when thrown.")]
+        [SerializeField] bool breaksDoors;
 
         Rigidbody _body;
 
         public GrabData Grab => grab != null ? grab : GrabData.Default;
+        public bool BreaksDoors => breaksDoors;
 
         void Awake() => _body = GetComponent<Rigidbody>();
 

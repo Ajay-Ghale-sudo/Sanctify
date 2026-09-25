@@ -156,6 +156,7 @@ namespace Sanctify.Editor
             CreateInteractionTests(parent);
             CreateGrabTests(parent);
             CreateDragTests(parent);
+            CreateDoorTests(parent);
             UpgradePlayerRigs();
 
             Selection.activeGameObject = arena;
@@ -244,6 +245,148 @@ namespace Sanctify.Editor
             GrabProp(parent, PrimitiveType.Cube, "Heavy Crate", new Vector3(-4.5f, 0.405f, -12f), Vector3.one * 0.8f, 40f, standard).name = "Drag_HeavyCrate";
             GrabProp(parent, PrimitiveType.Cube, "Stone Block", new Vector3(4.5f, 0.305f, -12.5f), new Vector3(0.9f, 0.6f, 0.9f), 100f, standard).name = "Drag_StoneBlock";
             GrabProp(parent, PrimitiveType.Cube, "Corridor Crate", new Vector3(0f, 0.405f, 7f), Vector3.one * 0.8f, 40f, standard).name = "Drag_CorridorCrate";
+        }
+
+        /// <summary>
+        /// Two doorways east of the stairs, facing north and south. The first door is free, with a
+        /// 40 kg crate beside it to wedge against it. The second is bolted shut from the south.
+        /// Between them lie iron props that break either door when thrown at it. South of those,
+        /// a hut with no way in.
+        /// </summary>
+        static void CreateDoorTests(Transform arena)
+        {
+            var standard = GetOrCreateAsset<GrabData>("SO_Grab_Default", InteractionSettingsFolder);
+            var dense = GetOrCreateAsset<GrabData>("SO_Grab_Dense", InteractionSettingsFolder, data => data.throwMultiplier = 2.5f);
+            var fixture = GetOrCreateAsset<GrabData>("SO_Grab_Fixture", InteractionSettingsFolder, data => data.throwMultiplier = 0f);
+
+            var group = new GameObject("DoorTests");
+            group.transform.SetParent(arena, false);
+            Transform parent = group.transform;
+
+            Doorway(parent, "Door", new Vector3(15f, 0f, -4f));
+            GrabProp(parent, PrimitiveType.Cube, "Heavy Crate", new Vector3(16.6f, 0.405f, -5.2f), Vector3.one * 0.8f, 40f, standard).name = "Door_BlockingCrate";
+
+            Rigidbody bolted = Doorway(parent, "Bolted Door", new Vector3(15f, 0f, -9f));
+            Bolt(parent, bolted, fixture);
+
+            // South of the free door and on the bolted door's locked side, clear of both swings.
+            // Dense, so they throw at 4 to 5 m/s, over the doors' 2.5 m/s Break Speed.
+            var breakers = new[]
+            {
+                GrabProp(parent, PrimitiveType.Sphere, "Iron Ball", new Vector3(13.4f, 0.105f, -5.6f), Vector3.one * 0.2f, 4f, dense),
+                GrabProp(parent, PrimitiveType.Sphere, "Iron Ball", new Vector3(13.4f, 0.105f, -6.2f), Vector3.one * 0.2f, 4f, dense),
+                GrabProp(parent, PrimitiveType.Cube, "Iron Weight", new Vector3(13.4f, 0.105f, -6.8f), Vector3.one * 0.2f, 5f, dense),
+            };
+            foreach (var breaker in breakers)
+                SetBool(breaker.GetComponent<PhysicsProp>(), "breaksDoors", true);
+
+            Hut(parent, new Vector3(15f, 0f, -14.5f), fixture);
+        }
+
+        /// <summary>
+        /// A 4 × 4 m hut with no way in: its door is bolted on the inside, and the only other
+        /// opening is a window in the back wall. That's big enough to crouch through (1.3 m; a
+        /// crouch is 1.2, standing 1.8) but its sill is 1.1 m up, far over the 0.3 m step.
+        /// </summary>
+        static void Hut(Transform parent, Vector3 centre, GrabData boltData)
+        {
+            const float half = 2f;
+            const float wall = 0.2f;
+            const float height = 2.4f; // level with the top of the doorway
+            const float windowWidth = 0.9f;
+            const float sill = 1.1f;   // the window runs from here up to the roof
+            float west = centre.x - half;
+            float east = centre.x + half;
+            float front = centre.z + half - wall * 0.5f; // north: the door
+            float back = centre.z - half + wall * 0.5f;  // south: the window
+            float doorway = DoorWidth * 0.5f + DoorGap + PostWidth;
+
+            void Span(string name, float x0, float x1, float y0, float y1, float z)
+                => Block(parent, name, new Vector3((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, z), new Vector3(x1 - x0, y1 - y0, wall));
+
+            Block(parent, "Hut Wall W", new Vector3(west + wall * 0.5f, height * 0.5f, centre.z), new Vector3(wall, height, half * 2f));
+            Block(parent, "Hut Wall E", new Vector3(east - wall * 0.5f, height * 0.5f, centre.z), new Vector3(wall, height, half * 2f));
+            Span("Hut Wall N", west, centre.x - doorway, 0f, height, front);
+            Span("Hut Wall N", centre.x + doorway, east, 0f, height, front);
+            Span("Hut Wall S", west, centre.x - windowWidth * 0.5f, 0f, height, back);
+            Span("Hut Wall S", centre.x + windowWidth * 0.5f, east, 0f, height, back);
+            Span("Hut Window Sill", centre.x - windowWidth * 0.5f, centre.x + windowWidth * 0.5f, 0f, sill, back);
+            Block(parent, "Hut Roof", new Vector3(centre.x, height + 0.1f, centre.z), new Vector3(half * 2f, 0.2f, half * 2f));
+
+            // The bolt goes on the leaf's south face: inside.
+            Bolt(parent, Doorway(parent, "Hut Door", new Vector3(centre.x, 0f, front)), boltData);
+        }
+
+        const float DoorWidth = 0.9f;
+        const float DoorHeight = 2f;
+        const float DoorThickness = 0.06f;
+        const float DoorGap = 0.05f;
+        const float PostWidth = 0.3f;
+
+        /// <summary>
+        /// Two posts, a lintel, and a 25 kg door leaf hinged on the west post, opening both ways.
+        /// The leaf's origin is on the hinge line, unscaled, with +x across the door.
+        /// </summary>
+        static Rigidbody Doorway(Transform parent, string name, Vector3 position)
+        {
+            float halfOpening = DoorWidth * 0.5f + DoorGap;
+            Block(parent, $"{name} Post W", position + new Vector3(-halfOpening - PostWidth * 0.5f, 1.2f, 0f), new Vector3(PostWidth, 2.4f, 0.2f));
+            Block(parent, $"{name} Post E", position + new Vector3(halfOpening + PostWidth * 0.5f, 1.2f, 0f), new Vector3(PostWidth, 2.4f, 0.2f));
+            Block(parent, $"{name} Lintel", position + new Vector3(0f, 2.25f, 0f), new Vector3((halfOpening + PostWidth) * 2f, 0.3f, 0.2f));
+
+            var leaf = new GameObject(name);
+            leaf.transform.SetParent(parent, false);
+            leaf.transform.localPosition = position + new Vector3(-DoorWidth * 0.5f, 0.02f, 0f);
+            Block(leaf.transform, "Slab", new Vector3(DoorWidth * 0.5f, DoorHeight * 0.5f, 0f), new Vector3(DoorWidth, DoorHeight, DoorThickness));
+            // Pokes through both faces, so it works from either side.
+            var handle = Block(leaf.transform, "Handle", new Vector3(DoorWidth - 0.12f, 1f, 0f), new Vector3(0.12f, 0.05f, 0.22f));
+
+            var body = leaf.AddComponent<Rigidbody>();
+            body.mass = 25f;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+
+            var hinge = leaf.AddComponent<HingeJoint>();
+            hinge.anchor = new Vector3(0f, DoorHeight * 0.5f, 0f);
+            hinge.axis = Vector3.up;
+            hinge.useLimits = true;
+            hinge.limits = new JointLimits { min = -100f, max = 100f };
+            hinge.useSpring = true; // spring 0, damper only: hinge friction
+            hinge.spring = new JointSpring { damper = 3f };
+
+            var door = leaf.AddComponent<Door>();
+            SetReference(door, "handle", handle.GetComponent<Collider>());
+            SetString(door, "focusText", name);
+            return body;
+        }
+
+        /// <summary>
+        /// A 1 kg bolt on the door's south face above the handle, slid home into the east post. It
+        /// slides 10 cm along the door; its joint's connected anchor marks the middle of that.
+        /// </summary>
+        static void Bolt(Transform parent, Rigidbody door, GrabData data)
+        {
+            const float travel = 0.1f;
+            // ponytail: a trigger, so the bolt can sit in the post without shoving the door; a solid keeper if bolts need to stop doors by themselves
+            var home = new Vector3(DoorWidth + 0.02f, 1.35f, -(DoorThickness * 0.5f + 0.015f));
+            var go = GrabProp(parent, PrimitiveType.Cube, "Bolt", parent.InverseTransformPoint(door.transform.TransformPoint(home)), new Vector3(0.12f, 0.03f, 0.03f), 1f, data);
+            go.GetComponent<Collider>().isTrigger = true;
+
+            var joint = go.AddComponent<ConfigurableJoint>();
+            joint.connectedBody = door;
+            joint.autoConfigureConnectedAnchor = false;
+            joint.anchor = Vector3.zero;
+            joint.axis = Vector3.right;
+            joint.connectedAnchor = home - new Vector3(travel * 0.5f, 0f, 0f);
+            joint.xMotion = ConfigurableJointMotion.Limited;
+            joint.yMotion = ConfigurableJointMotion.Locked;
+            joint.zMotion = ConfigurableJointMotion.Locked;
+            joint.angularXMotion = ConfigurableJointMotion.Locked;
+            joint.angularYMotion = ConfigurableJointMotion.Locked;
+            joint.angularZMotion = ConfigurableJointMotion.Locked;
+            joint.linearLimit = new SoftJointLimit { limit = travel * 0.5f };
+            joint.xDrive = new JointDrive { positionDamper = 1000f, maximumForce = float.MaxValue }; // friction when let go
+
+            SetReference(door.GetComponent<Door>(), "bolt", joint);
         }
 
         /// <summary>One body, five colliders: every collider must stop touching the player while held.</summary>
