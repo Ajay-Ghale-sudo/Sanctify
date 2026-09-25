@@ -12,13 +12,15 @@ namespace Sanctify.Characters.Player
     ///     the turn keeps going while the stick pushes that way, even as a held object lags back
     ///     from the edge, easing off the further back it falls. Letting the stick off stops it,
     ///     so a cursor left at the edge doesn't spin
-    ///   - loose objects can be grabbed, and interact toggles the grab
-    ///   - while something is held, the drawn cursor sits on the grabbed point, showing where the
-    ///     object is. The stick still moves the point it's pulled toward, unseen, but only so far
-    ///     ahead of the object (the same for depth), so heavy objects are waited for rather than
-    ///     slung. Only the object reaching the edge turns the view. Letting go leaves the cursor
-    ///     where the object was
-    ///   - while something is held, the bumpers move it nearer or farther instead of strafing
+    ///   - loose objects can be grabbed, or dragged if too heavy to lift, and interact toggles it
+    ///   - while something is held or dragged, the drawn cursor sits on the grabbed point, showing
+    ///     where the object is. The stick still moves the point it's pulled toward, unseen, but
+    ///     only so far ahead of the object (the same for depth), so heavy objects are waited for
+    ///     rather than slung. The object's own swing never drags that point along, so it settles
+    ///     about where the stick left it. Only the object reaching the edge turns the view.
+    ///     Letting go leaves the cursor where the object was
+    ///   - while something is held, the bumpers move it nearer or farther instead of strafing;
+    ///     while dragging, they do nothing (the drag state stops strafing)
     ///   - the triggers raise the player onto their toes or crouch them, instead of pitching
     ///
     /// It sits above the interaction states rather than being one, so the cursor keeps working
@@ -35,6 +37,8 @@ namespace Sanctify.Characters.Player
     public sealed class PlayerInteractMode : MonoBehaviour
     {
         static readonly Vector2 Centre = new(0.5f, 0.5f);
+        // Squared degrees per second above which the view counts as turning, for the leash.
+        const float TurningThreshold = 1f;
 
         [Header("Cursor")]
         [Tooltip("Cursor speed at full stick, in view widths per second.")]
@@ -63,6 +67,7 @@ namespace Sanctify.Characters.Player
         PlayerInputReader _input;
         PlayerInteractor _interactor;
         PlayerStance _stance;
+        PlayerLook _look; // optional: without it, the leash never counts the view as turning
 
         Vector2 _cursor = Centre;
         Vector2 _edgeLook;
@@ -86,6 +91,7 @@ namespace Sanctify.Characters.Player
             _input = GetComponent<PlayerInputReader>();
             _interactor = GetComponent<PlayerInteractor>();
             _stance = GetComponent<PlayerStance>();
+            _look = GetComponent<PlayerLook>();
         }
 
         void OnDisable()
@@ -110,11 +116,12 @@ namespace Sanctify.Characters.Player
                 return;
 
             Vector2 stick = canLook ? Vector2.ClampMagnitude(_input.Peek, 1f) : Vector2.zero;
+            Vector2 before = _cursor;
             MoveCursor(stick, deltaTime);
             // A held object leads: the pull target stays within reach of it, and it has to reach
             // the edge itself to turn the view.
             if (_onHeldObject)
-                _cursor = ClampToLimit(DisplayCursor + Vector2.ClampMagnitude(_cursor - DisplayCursor, maxLead));
+                _cursor = LeashToHeldObject(before);
             _edgeLook = EdgeLook(_onHeldObject ? DisplayCursor : _cursor, stick);
 
             _stance.Requested = _input.TiptoeHeld ? Stance.Tiptoe
@@ -137,7 +144,7 @@ namespace Sanctify.Characters.Player
                 return;
             }
 
-            if (_interactor.Current is GrabState grab && grab.TryGetDrawnGrabPoint(out Vector3 grabPoint))
+            if (_interactor.Current is HeldState held && held.TryGetDrawnGrabPoint(out Vector3 grabPoint))
             {
                 _onHeldObject = true;
                 // Behind the camera: stay where it was last seen.
@@ -200,6 +207,23 @@ namespace Sanctify.Characters.Player
 
             Vector2 shaped = stick / magnitude * Mathf.Pow(magnitude, stickCurve);
             _cursor = ClampToLimit(_cursor + shaped * (cursorSpeed * deltaTime));
+        }
+
+        /// <summary>
+        /// Keeps the pull target within reach of a held object. The stick can't take it more than
+        /// <see cref="maxLead"/> ahead of where the object is drawn, and while the view turns it's
+        /// drawn back to within that, so a lagging heavy object is waited for rather than slung.
+        /// The object's own swing never drags it along, though: left alone, the target stays
+        /// where the stick put it, and the object settles about it.
+        /// </summary>
+        /// <param name="before">The target before this frame's stick movement.</param>
+        Vector2 LeashToHeldObject(Vector2 before)
+        {
+            float lead = maxLead;
+            bool viewTurning = _look != null && _look.AngularVelocity.sqrMagnitude > TurningThreshold;
+            if (!viewTurning)
+                lead = Mathf.Max(lead, (before - DisplayCursor).magnitude);
+            return ClampToLimit(DisplayCursor + Vector2.ClampMagnitude(_cursor - DisplayCursor, lead));
         }
 
         Vector2 ClampToLimit(Vector2 viewport) => new(

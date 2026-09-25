@@ -44,5 +44,26 @@ namespace Sanctify.Interaction
             PropDestroyed = true;
             ReturnToPrevious();
         }
+
+        /// <summary>
+        /// Where the held point is drawn this frame (the interpolated pose), so the cursor can sit
+        /// on the object. False for states that don't hold an object by a point.
+        /// </summary>
+        public virtual bool TryGetDrawnGrabPoint(out Vector3 point)
+        {
+            point = default;
+            return false;
+        }
+
+        /// <summary>Whether the physics states can take hold of a body: it moves, and isn't what the player stands on.</summary>
+        protected bool IsHoldable(Rigidbody body)
+        {
+            if (body == null || body.isKinematic)
+                return false;
+
+            // Holding what you stand on would drop you through it.
+            Collider ground = Interactor.Motor.GroundCollider;
+            return ground == null || ground.attachedRigidbody != body;
+        }
     }
 }

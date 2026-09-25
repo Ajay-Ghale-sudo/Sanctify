@@ -33,7 +33,7 @@ All paths are under `Assets/Scripts/` unless noted.
 | Switches and buttons | Not started | |
 | Doors and levers (hinge) | Not started | |
 | Drawers (slide) | Not started | |
-| Push and pull | Not started | |
+| Drag (push and pull) | Built, untested | `Interaction/States/DragState.cs`, `PhysicsProp.Handling` |
 | Held-object shadow | Built, untested | `Interaction/HeldObjectShadow.cs`, `Assets/Art/Interaction/` |
 | HUD, per-prop crosshair, pickup outline, messages | Not started | |
 | Inventory | Not started | `PickupItem.Take()` accepts everything and logs it |
@@ -86,13 +86,19 @@ LateUpdate   cameraRig.Tick → interactor.LateTick → interactMode.LateTick (d
 
 It has the same shape as Part 2's pseudocode, with these differences:
 
-- **Names.** The controller is `PlayerInteractor`, not `PlayerInteraction`. State IDs are `InteractionStateId { Default, Pickup, Grab }`, and each new state is registered in `PlayerInteractor.Awake`.
+- **Names.** The controller is `PlayerInteractor`, not `PlayerInteraction`. State IDs are `InteractionStateId { Default, Pickup, Grab, Drag }`, and each new state is registered in `PlayerInteractor.Awake`.
 - **Entering a state.** A prop calls `Begin(interactor, id, body, hit)`, which calls `PlayerInteractor.BeginInteraction`. That checks `state.CanEnter(context)` first. If the state refuses, the current state keeps running. Grab uses this to refuse kinematic bodies and the body the player is standing on.
 - **`Enter()` and `Exit()` take no arguments.** `ChangeState` sets `next.Previous = current` and makes the new state current before calling `Enter`, so a state can bail out from inside `Enter`. States leave with `ReturnToPrevious()`, and `ChangeState(null)` means Default.
 - **The prop is passed the interactor.** There's no global player, so `Interactable.Interact(interactor, body, hit)` receives it. A prop remembers who is using it (`IsInteractedWith`), and its `OnDestroy` notifies that interactor, which ends the state.
 - **`HeldState`** loads `Prop`, `Body` and `HitPoint` from the context and tracks `PropDestroyed`. Subclasses call `base.Enter()` first and `base.Exit()` last.
 - **Extra hooks.** `LateTick` runs after the camera, for anything that follows the rendered view, such as the pickup lerp. There's no `OnScroll`: interact mode sets hold depth by calling `GrabState.AdjustDepth`.
 - **Focus.** `DefaultState` uses `PlayerInteractor.CastFocusRay`. It casts from the rendered camera through `CursorViewport`, takes the nearest hit, and skips the player's own colliders and any trigger that doesn't belong to a prop. It exposes `FocusProp`. There's no HUD yet, so `DebugCrosshair` reads it.
+- **Range depends on the prop.** `Interactable.CanFocus(interactor, hit)` checks the hit distance against the prop's `maxFocusDistance` (2 m from the eye), then asks `IsUsableBy(interactor, hit)`, which gets the hit so props can check reach. `PhysicsProp` only allows loose objects within arm's reach, measured flat from the side of the player's capsule (`PlayerInteractor.ReachTo`), so the floor counts too:
+  - pickups: anything the 2 m focus ray reaches
+  - grabs: `grabReach` (0.7 m)
+  - drags: `dragReach` (0.5 m), facing the point within 45°
+
+  On the floor, where the eye is 1.65 m up, the focus ray reaches about 0.78 m past the capsule, so pickups only reach a little farther than grabs there. At table height the gap is much wider. `GrabState.CanEnter` and `DragState.CanEnter` repeat the checks. (User request, 2026-09-25: pickups farther than grabs, grabs farther than drags.)
 - **Poses and services for states.** `PlayerInteractor` provides:
   - `FocusRay` and `AimDirection`: the rendered cursor ray, including head bob and peek. Use these for aiming and throwing.
   - `ViewPose` and `GetFixedStepAimRay()`: the same view and cursor direction at the latest physics step, without bob or interpolation. Physics goals use these, so held objects don't shake with the head bob.
@@ -114,9 +120,14 @@ This is new, not part of the design. `PlayerInteractMode` recreates the cursor m
   - The left stick still turns the player left and right.
 - **Bumpers** call `GrabState.AdjustDepth` while something is held, and strafe is zeroed only then. With empty hands they strafe as normal. (User decision, 2026-09-23.)
 - **Triggers** set the stance through `PlayerStance`: RT is tiptoe and LT is crouch (keyboard: Up and Down).
-- **Grabbing only happens in this mode, and toggles.** `PhysicsProp` overrides `Interactable.IsUsableBy` to require `PlayerInteractor.CursorMode`, so outside the mode loose objects aren't focused at all. `GrabState.OnAction` lets go on the next Interact press. (User decision, 2026-09-23.)
+- **Grabbing only happens in this mode, and toggles.** `PhysicsProp` overrides `Interactable.IsUsableBy` to require `PlayerInteractor.CursorMode` (and reach; see "Range depends on the prop"), so outside the mode loose objects aren't focused at all. `GrabState.OnAction` lets go on the next Interact press. (User decision, 2026-09-23.)
 - **The drawn cursor sits on a held object.** `LateTick` runs after the camera and projects the grabbed point (`GrabState.TryGetDrawnGrabPoint`, the interpolated pose) through `PlayerInteractor.TryGetViewportPoint` into `DisplayCursor`. The stick still moves `Cursor`, which is now a hidden pull target. When the object is let go, dropped or thrown, `Cursor` jumps to where the object was drawn, so the visible cursor doesn't.
-- **Leashes.** The hidden target is kept within `maxLead` (0.15 view units) of `DisplayCursor` every frame. The bumpers can't push the held depth more than `maxDepthLead` (0.25 m) past `GrabState.PointDepth`, where the object really is. The first version had no limit: with a heavy object, the target ran to the screen edge and turned the camera, which carried the goal away. The pull hit `maxPullForce`, which leaves no braking, and the object slingshotted. A light object trails by about c ÷ k = 0.12 s: about 0.11 view units at full cursor speed and 0.125 at a full-speed turn. The leash sits just above that, so only heavy or snagged objects reach it. The screen leash also pulls the target back while you turn with the left stick. After a fast turn with something heavy, the object therefore stays where it lagged to rather than springing back. The depth leash only limits the bumpers, so a prop's fixed hold depth isn't cut short.
+- **Leashes.** `PlayerInteractMode.LeashToHeldObject` keeps the hidden target within reach of the object:
+  - **The stick** can't take the target more than `maxLead` (0.15 view units) from `DisplayCursor`, or further than it already was.
+  - **While the view turns** (`PlayerLook.AngularVelocity` above 1°/s), the target is drawn back to within `maxLead`. After a fast turn with something heavy, the object therefore stays where it lagged to rather than springing back.
+  - **Otherwise the object's own motion never drags the target.** Until 2026-09-25 the leash was applied every frame. An object that overshot or kept swinging after the stick stopped pulled the target along with it, so the user saw the object drag the cursor instead of settling about it.
+  - **Depth.** The bumpers can't push the held depth more than `maxDepthLead` (0.25 m) past `GrabState.PointDepth`, where the object really is. The depth leash only limits the bumpers, so a prop's fixed hold depth and the draw-in aren't cut short.
+  - **Why.** The first version had no limit: with a heavy object, the target ran to the screen edge and turned the camera, which carried the goal away, and the object slingshotted. A light object trails by about c ÷ k = 0.13 s, about 0.12 view units at full cursor speed. The leash sits just above that, so only heavy or snagged objects reach it.
 - **Exit** (R3 again, or a lock on Actions) returns the stance to standing and calls `interactor.Cancel()`, which drops a held object and puts back an unfinished pickup. The focus ray snaps back to the centre at once, while the drawn cursor (`DisplayCursor`) eases back.
 - **Tuning** is on the component: cursor speed, stick curve, cursor limit, return sharpness, edge band, depth speed and the two leashes.
 
@@ -124,13 +135,13 @@ This is new, not part of the design. `PlayerInteractMode` recreates the cursor m
 
 | Control | Normal mode | Interact mode |
 | --- | --- | --- |
-| Left stick Y / W, S | Walk | Walk |
-| Left stick X / ←, → | Turn | Turn |
-| Bumpers / A, D | Strafe | Strafe; while holding, move the held object nearer or farther |
+| Left stick Y / W, S | Walk | Walk; while dragging, push (forward) or pull (back) |
+| Left stick X / ←, → | Turn | Turn; while dragging, turning away from the object is slower the further it's turned, and too far (60°) lets go |
+| Bumpers / A, D | Strafe | Strafe; while holding, move the held object nearer or farther; while dragging, nothing |
 | Triggers / ↑, ↓ | Pitch | RT tiptoe, LT crouch |
 | Right stick / IJKL | Peek | Move the cursor; at the edge it turns the view |
 | R3 / Tab | Enter interact mode | Exit interact mode |
-| Circle / E | Interact at the centre (not loose objects) | Interact at the cursor; press to grab, press again to drop |
+| Circle / E | Interact at the centre (not loose objects) | Interact at the cursor; press to grab (or drag, if too heavy to lift) within arm's reach, press again to let go |
 | Square / left mouse | Attack | Throw if holding |
 | Triangle / F | Magic, swallowed while holding | Magic, swallowed while holding |
 | Cross / Left Shift | Run | Run |
@@ -165,16 +176,36 @@ This differs from Part 2. User testing rejected the Amnesia grab for three reaso
 
 The jitter was a real instability. Amnesia's spin gain of 100 closes the angle error in 0.01 s, which is half of one 0.02 s Unity physics step. So each step overshoots by about 1.6×, the D term adds a kick every time the error changes sign, and the object ends up flipping back and forth at the spin cap. **Don't bring back Part 2's grab gains.**
 
+On 2026-09-25 the user reported two more problems. Grabbed objects were held too far away, and physics had too much effect: after the stick stopped, a moving object carried the cursor along instead of settling about it. The fixes were:
+
+- the reach limit
+- drawing far grabs in
+- critical damping
+- braking within the pull cap
+- holding the grabbed point as a true pivot
+- the leash change in "Cursor interact mode"
+
 How `GrabState` works now:
 
+- **Reach and hold distance.** Loose objects can only be grabbed within `grabReach` (0.7 m) of the side of the player's capsule, measured flat. The grab starts at the hit depth minus `grabPull`, so nothing jumps. If that's farther than `holdDistance` (0.9 m from the eye), `_depth` is then drawn in at `drawInSpeed` (1.5 m/s). An object picked off the floor rises toward the player's waist along the cursor ray. Using the bumpers stops the draw-in, and they can move the object out to `GrabData.maxDepth`. Previously, `AdjustDepth(0)` ran every frame and clamped the depth straight to `maxDepth` (1.6 m), which is where far grabs were held.
 - **Pulled by the grabbed point.** The point that was grabbed (stored in body space, from the hit) is pulled toward a goal by a spring. The goal is on the fixed-step cursor ray at `_depth`, plus a view-space offset for props that use a pose offset. The force is applied at that point with `AddForceAtPosition`.
-- **Damped against the player's movement, not the goal's.** The PD gives the point's wanted acceleration, `PD(goal − point, −(pointVelocity − playerVelocity))`. Walking carries the object along, while dragging the cursor or turning makes it trail by roughly damping ÷ stiffness seconds.
+- **Damped against the player's movement, not the goal's.** `GrabState.PullAcceleration` works out the point's wanted acceleration in velocity form, which is the same spring and damper written differently:
+  - The wanted speed toward the goal, relative to the player, is (stiffness ÷ damping) × the gap.
+  - The acceleration is damping × (wanted speed − the point's speed relative to the player).
+  - Walking carries the object along, while moving the cursor or turning makes it trail by roughly damping ÷ stiffness seconds (0.13 s).
+  - Stiffness 225 and damping 30 are critically damped, so the point stops on the cursor without overshooting. The old 100 and 12 were at 0.6 of critical and overshot. Damping × `fixedDeltaTime` is 0.6, well within stability given the effective-mass sizing below.
+- **Braking within the cap.** The wanted speed is capped at √(2 × a × gap). Here a is 60% of the deceleration that `maxPullForce` can give the point along the gap, using its effective mass in that direction. So something heavy that has got going arrives and stops instead of sailing past. Light objects are unaffected at normal gaps.
 - **Sized by the point's effective mass, not the body's.** A push away from the centre of mass partly turns the body instead of moving it. So a point far from the centre behaves as if it's lighter than the whole object: a plank's end acts like about a quarter of the plank's mass, and a box's corner like about a fifth of the box's. `GrabState.EffectiveMassAt` builds the 3×3 matrix that maps a force at the point to that point's acceleration, then inverts it to get the force needed for a wanted acceleration. The first version multiplied by the whole mass instead. That overdrove off-centre points past what one physics step can settle (effective damping × `fixedDeltaTime` > 1), and objects buzzed and kept spinning.
-- **Hangs from the grabbed point.** Gravity stays on. The point also gets a support force, effective mass × −gravity, which is exactly what a pivot would supply: the point holds still while gravity swings the rest of the object down below it. The support isn't counted against `maxPullForce`, so heavy objects lag but never drop. Props that hold their orientation get their weight carried at the centre instead, so gravity doesn't twist them.
-- **Weight.** The pull is capped at `maxPullForce` newtons, so heavy objects lag behind. Carrying something heavy also slows the player, through `SpeedMultiplierFor` and `PlayerMovement.SpeedMultiplier`.
+- **Hangs from the grabbed point, held as a pivot.** Gravity stays on. On top of the pull, the point gets effective mass × −(everything else that would accelerate it). That's what a real pivot supplies: the point holds still while the rest of the object swings below and about it. Three things would otherwise move the point:
+  - gravity
+  - the centripetal acceleration of the point as the body spins about its centre of mass, ω × (ω × r)
+  - the swing-damping torque's effect on the point, (I⁻¹τ) × r
+
+  The first version only cancelled gravity and let the spring absorb the rest, so a swinging object tugged the point, and the cursor drawn on it, around. PhysX doesn't integrate gyroscopic torque by default, so that term is left out. None of this counts against `maxPullForce`, so heavy objects lag but never drop. Props that hold their orientation get their weight carried at the centre instead, so gravity doesn't twist them.
+- **Weight.** The pull is capped at `maxPullForce` newtons, so heavy objects lag behind, and the braking above keeps them from overshooting. Carrying something heavy also slows the player, through `SpeedMultiplierFor` and `PlayerMovement.SpeedMultiplier`.
 - **Holding a fixed angle is optional.** `GrabData.holdOrientation` (or `usePoseOffset`) adds a torque loop that keeps the grabbed angle relative to the view. Its catch-up gain is capped at 0.9 ÷ `fixedDeltaTime`, so it can't overshoot within a step. `GrabState.Rotate` turns that held angle, but nothing calls it yet.
 - **Keep-out.** The goal is pushed sideways until it's at least the capsule radius plus `keepOutMargin` from the player, so the cursor can't drag an object into the camera.
-- **Swing damping about the grabbed point.** `GrabState.DampSwing` applies a braking torque equal to `swingDamping` × the angular momentum about the grabbed point. That momentum is the body's own spin plus its centre of mass travelling round the point. Unity's angular damping, which the first version raised, acts about the centre of mass only, so it barely touches a pendulum swing, where most of the motion is the centre of mass moving along an arc. A ball held at its surface got about 30% of the damping and kept swinging for about 8 s. A cap stops one step from taking off more than half the spin. Props that hold their orientation skip this; their spin loop already controls rotation.
+- **Swing damping about the grabbed point.** `GrabState.SwingDampingTorque` gives a braking torque equal to `swingDamping` × the angular momentum about the grabbed point. The pivot hold above keeps it from moving the point, so the momentum about the point decays at exactly that rate. That momentum is the body's own spin plus its centre of mass travelling round the point. Unity's angular damping, which the first version raised, acts about the centre of mass only, so it barely touches a pendulum swing, where most of the motion is the centre of mass moving along an arc. A ball held at its surface got about 30% of the damping and kept swinging for about 8 s. A cap stops one step from taking off more than half the spin. Props that hold their orientation skip this; their spin loop already controls rotation.
 - **While held**, mass is multiplied by `massMultiplier` and interpolation is on. `Enter` saves both and `Exit` restores them.
 - **Break distance.** If the grabbed point gets farther from the eye than max(start distance, `maxDepth`, depth) × 1.1 + 0.2, the object drops.
 - **Line of sight.** Each fixed step, `PlayerInteractor.HasLineOfSight` casts a ray from the eye to the grabbed point. The player, triggers and the held body itself don't block it. If the ray stays blocked for longer than `lineOfSightGrace` (0.5 s), the object drops.
@@ -183,7 +214,7 @@ How `GrabState` works now:
   - A multiplier above 1 is for dense throwables: `SO_Grab_Dense` uses 2.5 for the brick.
   - A multiplier of 0 means the object can't be thrown.
 - **Tuning.**
-  - Player-wide values are in `PlayerGrabSettings` (asset `SO_PlayerGrab`). Code defaults: stiffness 100, damping 12, `maxPullForce` 80 N, `swingDamping` 6 (swing dies to a tenth in about 0.8 s), `orientationResponse` 8, `maxSpin` 6, `spinCatchUp` 30, `grabPull` 0.08, `keepOutMargin` 0.15, `lineOfSightGrace` 0.5 s, `throwStrength` 8, `maxThrowSpeed` 14, `throwLoft` 8°. Release caps are 2 m/s and 4 rad/s. The player slows from 2 kg of carried mass down to 0.5× speed at 20 kg.
+  - Player-wide values are in `PlayerGrabSettings` (asset `SO_PlayerGrab`). Code defaults: stiffness 225, damping 30, `maxPullForce` 80 N, `swingDamping` 6 (swing dies to a tenth in about 0.8 s), `orientationResponse` 8, `maxSpin` 6, `spinCatchUp` 30, `grabReach` 0.7 m, `grabPull` 0.08, `holdDistance` 0.9 m, `drawInSpeed` 1.5 m/s, `keepOutMargin` 0.15, `lineOfSightGrace` 0.5 s, `throwStrength` 8, `maxThrowSpeed` 14, `throwLoft` 8°. Release caps are 2 m/s and 4 rad/s. The player slows from 2 kg of carried mass down to 0.5× speed at 20 kg.
   - Per-prop values are in `GrabData` (assets `SO_Grab_Default` and `SO_Grab_Dense`).
 
 ## Pickup as built
@@ -195,6 +226,52 @@ This matches Part 2's pickup, with these changes:
 - **Refused or interrupted pickups are restored exactly.** The item goes back to its starting pose, and its colliders, kinematic flag, interpolation and collision mode are all restored.
 - **The player stands still.** Movement and look are swallowed during a pickup.
 - **Own body only.** `PickupItem` uses its own Rigidbody, not whichever body the ray hit, so an item without a Rigidbody can't freeze a parent body.
+
+## Drag as built
+
+Dragging is Part 2's "Push and pull" (Amnesia's push state), for objects too heavy to lift. The user made these choices on 2026-09-23:
+
+- walking pushes and pulls, rather than a cursor-driven drag
+- mass decides what's dragged, with a per-prop override
+- interact mode only
+
+After the first playtest, the user asked for five changes: forces against friction (the first version set the object's speed directly and felt too smooth), no strafing, a slight lift, everything applied at the grabbed point, and turning held to a narrow window. After the second, they asked for two more:
+
+- **Turning.** Friction lets the object slew out from in front of the player, so the narrow window is gone. Turning is free, but turning away from the object slows the further it's turned, and turning too far lets go.
+- **Reach.** Objects could be dragged from too far away, and they moved the moment the drag started. A reaching phase was added, where the player walked up to the object before the hands took hold. After the third playtest (2026-09-25), the user found that confusing: the drag started, but walking didn't move anything. The reaching phase is gone. Heavy objects can only be focused within reach instead.
+
+- **Lift or drag.** `PhysicsProp.handling` decides: `ByMass` (the default), `Lift` or `Drag`. `ByMass` drags anything heavier than `PlayerGrabSettings.maxLiftMass` (20 kg). The prop picks `Grab` or `Drag` in `HandleInteract`. Like grabbing, it only works in interact mode, and Circle toggles it.
+- **Reach.** `DragState.CanTakeHold` decides where a drag can start. `PhysicsProp.IsUsableBy` uses it to decide whether a heavy object is focused at all, and `DragState.CanEnter` checks it again. Both of these must be true:
+  - The grabbed point is within `dragReach` (0.5 m) of the side of the player's capsule, measured flat. That's 0.85 m from the player's middle.
+  - The player faces it within three quarters of `dragLetGoAngle` (45°). The margin keeps a new drag from ending at once.
+
+  `Enter` takes hold straight away. It records the rest height and the break distance, starts the lift and speed limits, and resets the effort.
+- **Effort.** `DragState.OnMove` stores the input and lets the player walk. Each fixed step, the forward/back input ramps an effort from −1 (pull) to +1 (push):
+  - Leaning in takes `dragLeanTime` (0.4 s); easing off or reversing takes 0.1 s.
+  - Force = effort × `dragStrength` (650 N). It fades to nothing as the grabbed point's speed nears the pace, `DragSpeedFor(mass)`: 0.9 m/s at the lift limit, down to 0.3 m/s at 100 kg.
+- **Along the line to the player.** Pushes act along the horizontal line from the player's feet to the grabbed point, and pulls along the reverse. Turning changes the direction the player walks, which moves the line, so that's how the player steers.
+- **Everything at the grabbed point.** Every force goes through `AddForceAtPosition`. Default friction (0.6) is left alone, so where the object is grabbed decides what it does. For the 40 kg, 0.8 m crate:
+  - Pulled by the top edge, where there's no lift, it tips toward the player at about 196 N, before it would slide at 235 N.
+  - Pulled by the middle of a face, it slides. The pull passes near the centre of mass, and half the lift lightens it.
+  - Pulled by the base, it slides with its near edge raised by the lift.
+  - The stone block (100 kg, 0.6 m tall) can't be tipped from the top within 650 N. It slides slowly.
+- **Holding the line.** The grabbed point's sideways slide, relative to the line, is damped at 8/s per kg. The rest of the object is free to swing and turn about the point.
+- **Lift.** A spring pulls the grabbed point toward `dragLiftHeight` (5 cm) above where it rested, and that height follows the player up and down stairs.
+  - The force is capped at the lesser of `maxDragLift` (250 N) and 60% of the object's weight, so it never leaves the floor. The cap eases in over `dragLeanTime` after grabbing, so nothing jumps.
+  - The cap is also scaled by how low the grab is, measured on the object's collider bounds when grabbed: all of it at the base, half at mid-height, none at the top. Lifting at the top would take weight off the floor, which lowers friction. The crate would then slide (at about 94 N) before it could tip (at 196 N), so it couldn't be pulled over.
+  - Raising a crate's near edge takes about half its weight. Up to about 50 kg, the edge rises 2.5–3.5 cm; heavier things only get lighter to drag.
+  - The lift fades out if the grabbed point drops 10 cm below its rest, so a crate pulled over by its top can fall.
+  - Stiffness is 10,000 N/m, limited to 300 N/m per kg so light objects stay stable.
+- **The player follows it.** After applying the force, the state caps the player's wished forward speed (`PlayerMovement.SetAxisSpeedLimits`) to the grabbed point's speed along the push or pull direction, clamped to the pace. The cap takes effect on the next step. The cap is zero when the input opposes the effort or there's no effort, and strafe is always capped to zero. So the player leans in until the object moves, stops when it jams, and can't walk away when it snags.
+- **Pulling from close up.** If the effort is pulling and the object is within 0.1 m of the player's capsule (`CharacterMotor.WouldTouch`), the player leads at the pace instead. Without this, each would wait for the other.
+- **Solid to the player.** The body isn't added to `PlayerCollisionFilter`.
+- **Turning.** `DragState.Tick` measures the flat angle between the player's facing and the grabbed point every frame. It passes that to `PlayerLook.SetTurnAnchor` with a speed scale that falls linearly from 1 facing the point to `dragSlowestTurn` (0.25) at `dragLetGoAngle` (60°).
+  - `PlayerLook` applies the scale only while the yaw velocity is turning away from the anchor. Turning back, including the edge turn toward the object, is full speed.
+  - `FixedTick` lets go once the angle passes `dragLetGoAngle`, whether the player turned or the object slewed.
+  - Pitch has no window. In interact mode pitch comes only from the edge turn, which only turns toward the grabbed point.
+- **Cursor.** The drawn cursor sits on the grabbed point, as it does when grabbing. The bumpers do nothing. The right stick only matters at the edge of the view: pushing toward the grabbed point there turns the view toward it.
+- **Ending it.** Circle lets go. The drag also ends if the grabbed point gets farther from the player's feet than the starting distance × 1.2 + 0.3 m, if it's out of sight for longer than `lineOfSightGrace`, if the player turns more than `dragLetGoAngle` from it, or if the prop is destroyed. Attack and Magic are swallowed.
+- **No per-prop drag data.** Mass, friction and the grab point decide everything.
 
 ## Keeping props from breaking player collision
 
@@ -216,6 +293,7 @@ The **Sanctify → Player** menu has three commands:
   - Grab table (z −10.5): small box, ball and brick (dense).
   - Grab floor: an 8 kg crate, a 25 kg chest, a plank, and a stool made of five colliders.
   - Throw target: a stack of three boxes at z −15.
+  - Drag: a 40 kg Heavy Crate on open floor (−4.5, −12), a 100 kg Stone Block (4.5, −12.5), and a 40 kg Corridor Crate inside the narrowing corridor (0, 7). The 25 kg chest on the grab floor is dragged too, by mass.
 - **Upgrade Player Rigs In Scene** adds components that newer code requires (`PlayerStance`, `PlayerInteractMode`, `HeldObjectShadow`) to existing rigs and fills in empty settings and material references. It creates the held-shadow material and texture if they're missing. Extend it whenever you add a player component or settings asset, or the user's existing rig breaks.
 
 Debug aids:
@@ -225,23 +303,26 @@ Debug aids:
 
 ## Known issues and loose ends
 
-- **The latest round hasn't been playtested yet.** It covers:
-  - the edge turn that starts at the edge and keeps going while pushed, with raw pitch
-  - the held-object shadow
-  - the Decal renderer feature
-  - `SO_PlayerLook` rewritten with its current field names and the values it already used
-
-  The leashes, swing damping and strafing were played before this. The user reported jerky edge turning, especially for pitch, and difficulty judging a held object's position, and this round addresses both.
-- **Things to watch in that playtest:**
+- **The 2026-09-25 changes haven't been compiled or playtested yet.** These are the per-kind reach, the removed drag reaching phase, and the grab changes: draw-in, critical damping, braking, pivot hold and the leash. The user called grabbing done on 2026-09-23 (commit `f76d4d3`, pushed). Three drag versions have been played since, and the user accepted the third (free turning that slows and lets go) before asking for these.
+- **Things to watch when grabbing:**
+  - Light objects should feel about as quick as before, since the lag (0.13 s) is close to the old 0.12 s. If they feel sluggish, raise stiffness and keep damping at 2 × √stiffness, but keep damping × 0.02 under about 0.6.
+  - The pivot hold's centripetal term is uncapped. A held object knocked into a fast spin gets a correspondingly large force at the grabbed point for a step or two. That's physically right, but watch for pops.
+  - The draw-in moves the goal toward the eye at 1.5 m/s. A light object picked off the floor rises quickly toward the player's waist, which could read as a yank.
+- **Things to watch when dragging:**
+  - The tipping and sliding thresholds depend on friction. Every collider in the arena uses Unity's default (0.6). Other floor materials will change which grab does what.
+  - A crate pulled over by its top falls toward the player. It stops against their capsule, since the player is kinematic, but it may look abrupt.
+  - The player's acceleration eases off near top speed (`softApproachScale`). A light draggable that gets going faster than that can open a small gap while pushing, or close one while pulling.
+  - The cursor-leash and edge-turn code treat a dragged object like a held one.
+  - The let-go angle is measured flat, from the player's middle. Looking steeply down at a point close beside the player, it can be well off to the side while still on screen. A heavy object whose point is more than 45° off to the side isn't focused, which may read as a missing highlight. Grabbing near a corner starts some way off-centre, which leaves less room to turn before letting go.
+- **`SO_PlayerMovement.asset` still stores old field names** (`groundAcceleration: 8`, `groundFriction: 6`, `stopSpeed`). The code's `acceleration` (6) and `deceleration` (8) are using their defaults, not those tuned values. Rewrite the asset once the user says which values they want.
+- **Grab caveats still open** (grabbing was playtested and accepted, but none of these came up):
   - Grabbing an object from below flips it over, so it hangs under the grabbed point. That's correct for a single point, but it may look odd.
   - Long hanging objects can swing through the player's body, because collision with the player is off while holding. The keep-out only moves the grabbed point.
-  - Very heavy objects can still build up to cursor speed, and with the pull capped they can drift a little past where you stop. The leash bounds this but doesn't remove it; it reads as momentum.
   - Heavy objects are fully supported against gravity. To make them sag or drag along the floor instead, count the support against a cap.
 - **`GrabState.Rotate` has no binding.** It only matters for props with `holdOrientation`. The user deferred rotation until after playtesting (2026-09-23).
 - **`DebugCrosshair` is an OnGUI placeholder** for the cursor and focus text. The camera renders to a RenderTexture shown on an overlay canvas (`FixedAspectRenderer`), so real UI must position itself with `FixedAspectRenderer.ViewScreenRect` or `ViewportToGuiPoint`, not the raw screen size.
 - **`HoldPose` ignores the cursor.** Picked-up items always travel to the lower right of the view, even when grabbed at the edge of the screen in interact mode.
-- **`PhysicsProp` has no mode field yet.** Push and Slide should add one, as Part 2 describes.
-- **The player never pushes props, and props never push the player.** The capsule is kinematic and moved by teleporting. If something ends up inside it, the motor pushes the player back out. So a door swung into the player stops dead, but a door that's already overlapping the player shoves them out. Keep this in mind for Door and Push.
+- **The player never pushes props, and props never push the player.** The capsule is kinematic and moved by teleporting. If something ends up inside it, the motor pushes the player back out. So a door swung into the player stops dead, but a door that's already overlapping the player shoves them out. Keep this in mind for doors; dragging handles it by making a pulled object wait when it reaches the player.
 
 ---
 
@@ -641,7 +722,17 @@ Notes on the Amnesia details:
 
 ## Push and pull
 
-> **Status: not started.** This section is still the spec. Read Part 3, step 5 before building it: `motor.Move` must not be called from the state, per-axis speed limits belong on `PlayerMovement`, and the camera window needs a new API on `PlayerLook`.
+> **Status: built as `DragState`, with differences.** See Part 1, "Drag as built":
+> - Selection is by mass (`PhysicsProp.Handling`) instead of a per-prop mode alone.
+> - Forces act at the grabbed point, along the line to the player, against normal friction. The effort ramps in (`dragLeanTime`) instead of being constant.
+> - The push fades out near the pace instead of switching off above it.
+> - There's a height-scaled lift at the grabbed point.
+> - Only the drift damping is kept; friction does the stopping.
+> - A capsule-contact check replaces `SweepTest`.
+> - A drag can only start within arm's reach of the grabbed point, facing it.
+> - There's no camera window. Turning is free, slowed away from the object, and turning too far lets go.
+> - `PlayerMovement` gained per-axis speed limits, and `PlayerLook` gained a turn anchor that slows turning away from a direction.
+> - The pseudocode below is kept for intent.
 
 Push is for objects too heavy to lift. The player keeps walking normally, and the walk direction becomes the push direction. Two PDs keep the object honest: one removes sideways drift while you push, the other brakes it when you stop. The player's speed is capped to the object's speed, so pulling (walking backward) drags the object along at the same pace.
 
@@ -913,7 +1004,7 @@ The steps are ordered so each one can be tested in the arena before the next beg
 Ask these before the step that needs them. Don't guess.
 
 1. **Doors and levers in interact mode (step 3).** The proposal: the grabbed handle follows the cursor, constrained to the hinge's arc. In normal mode the same code works from the centre crosshair, so walking or turning drags the door, as in Amnesia. Is that the feel they want?
-2. **Push in interact mode (step 5).** Should walking push, as in Part 2, in both modes? Or should the cursor set the push direction in interact mode?
+2. ~~**Push in interact mode (step 5).**~~ Answered 2026-09-23: walking pushes and pulls (Part 2's design); interact mode only; objects over a mass limit are dragged, with a per-prop override. Built.
 3. ~~**Grabbing in normal mode (step 1).**~~ Answered 2026-09-23: grabbing only in interact mode. Built.
 4. **Rotating held objects.** Deferred by the user until after playtesting (2026-09-23). If it's wanted, one option: while Triangle is held, the right stick rotates the object instead of moving the cursor. Magic is already swallowed while holding.
 5. **Switches (step 2).** One-shot or toggle? Do they need a visible press or flip, or only an event?
@@ -942,10 +1033,36 @@ Arena checklist:
 - [ ] In interact mode with empty hands, the bumpers strafe.
 - [ ] Carrying something behind a pillar or round a corner drops it after about half a second. Passing it quickly behind a thin post doesn't.
 - [ ] In normal mode, loose objects don't highlight and can't be grabbed. Pickups still work.
-- [ ] The chest lags behind the cursor and slows the player down.
+- [ ] The 8 kg crate lags behind the cursor and slows the player a little. (The 25 kg chest is dragged now.)
 - [ ] Dropping the crate at your feet doesn't pop the player upward.
 - [ ] Throw distance falls as mass rises, and the brick still flies far.
 - [ ] Leaving interact mode with R3 drops the held object and stands the player up.
+
+Reach and grab-feel checklist (2026-09-25 changes):
+
+- [ ] Pickups still highlight from as far as before. Loose objects only highlight within about 0.7 m of your body, and heavy ones within about 0.5 m, and only when you roughly face them.
+- [ ] An object grabbed off the floor or the far side of the table comes in to about 0.9 m and hangs there. Nothing jumps as you grab it. The bumpers still push it back out.
+- [ ] Moving the cursor and stopping: the ball, brick and plank stop on the cursor instead of carrying it on. The body swings about the grabbed point and settles within about a second, while the cursor stays put.
+- [ ] The 8 kg crate lags more than the brick but doesn't sail past where you stop.
+- [ ] Light objects still feel quick, and nothing jitters while you stand still.
+- [ ] Turning with the left stick while holding something heavy doesn't slingshot it when you stop.
+
+Dragging checklist. Rebuild the arena for the new props: the 40 kg Heavy Crate, the 100 kg Stone Block, and the Corridor Crate in the funnel. The existing 25 kg chest is dragged too.
+
+- [ ] The chest and crates can't be lifted: Circle starts a drag. The 8 kg crate still lifts.
+- [ ] Heavy objects don't highlight until you're about half a metre from them and facing them. Once they do, Circle drags straight away, and nothing jumps.
+- [ ] Walking forward pushes and walking back pulls, and the player never gets ahead of it or leaves it behind. The bumpers do nothing.
+- [ ] Turning away from the object gets slower the further you turn, and turning back is full speed. Past about 60° you let go.
+- [ ] When a pushed crate slews off to one side, you can turn to keep it in front of you.
+- [ ] Heavy things take a moment to budge (leaning in). The stone block barely moves and is clearly harder work than the crate.
+- [ ] Where you grab matters:
+  - Pulled by the top edge, the crate tips over toward you.
+  - Pulled by the middle of a face, it slides.
+  - Pulled by the base, its near edge lifts a few centimetres. That should get it over a small lip. There isn't one in the arena yet.
+- [ ] Pushing off-centre turns the crate.
+- [ ] Pulling a crate you're standing right against works: you back off first, then it follows.
+- [ ] The corridor crate jams at the narrow end, the player stops with it, and nobody clips through anything.
+- [ ] Letting go (Circle, or leaving interact mode) leaves the crate where it is, and turning is back to full speed.
 
 ## Step 2: Switches and buttons
 
@@ -994,10 +1111,12 @@ The spec is Part 2, "Doors", with one change. Part 2 turns mouse movement into s
 ## Step 4: Drawers (SlideState)
 
 - **Mechanism:** a straight-line variant of step 3. Use a `ConfigurableJoint` with one free linear axis and limits. Project the cursor goal onto the slide axis, and drive the velocity along that axis with a PD.
-- **Prop:** either give `PhysicsProp` a `Mode { Grab, Push, Slide }` field, as Part 2 suggests, or make a separate `Drawer` prop. Choose whichever reads better once step 3 exists.
+- **Prop:** either add a handling to `PhysicsProp.Handling` (it has `ByMass`, `Lift` and `Drag`), or make a separate `Drawer` prop. A drawer is jointed and never free, so a separate prop probably reads better.
 - **Test props:** a cabinet with two drawers, one holding a pickup item. This checks that pickups on moving bodies still work.
 
 ## Step 5: Push and pull
+
+Status (2026-09-25): built as dragging and playtested three times. The latest change (focus limited to reach, no reaching phase) isn't compiled or playtested yet. See Part 1, "Drag as built". The notes below were the plan, and the camera window they describe was later replaced by the turn slowdown.
 
 The spec is Part 2, "Push and pull". It needs new hooks in existing systems:
 

@@ -24,6 +24,9 @@ namespace Sanctify.Characters.Player
         float _walkCapForDirection;
         float _runCapForDirection;
         float _speedMultiplier = 1f;
+        Vector2 _axisSpeedLimits = NoAxisSpeedLimits;
+
+        static readonly Vector2 NoAxisSpeedLimits = new(float.PositiveInfinity, float.PositiveInfinity);
 
         public StrideCycle Stride { get; } = new();
 
@@ -33,6 +36,15 @@ namespace Sanctify.Characters.Player
             get => _speedMultiplier;
             set => _speedMultiplier = Mathf.Max(0f, value);
         }
+
+        /// <summary>
+        /// Caps the wished speed along the player's own axes, in m/s, until cleared: e.g. so they
+        /// can't outpace something they're dragging. Applies from the next <see cref="Tick"/>.
+        /// </summary>
+        public void SetAxisSpeedLimits(float strafe, float forward)
+            => _axisSpeedLimits = new Vector2(Mathf.Max(strafe, 0f), Mathf.Max(forward, 0f));
+
+        public void ClearAxisSpeedLimits() => _axisSpeedLimits = NoAxisSpeedLimits;
 
         public PlayerMovementSettings Settings => settings;
         public CharacterMotor Motor => _motor;
@@ -163,6 +175,8 @@ namespace Sanctify.Characters.Player
             Vector2 walk = new Vector2(input.x * settings.walkStrafe, input.y * walkForwardCap) * _speedMultiplier;
             Vector2 sprint = new Vector2(input.x * settings.runStrafe, input.y * runForwardCap) * _speedMultiplier;
             Vector2 chosen = run ? sprint : walk;
+            chosen.x = Mathf.Clamp(chosen.x, -_axisSpeedLimits.x, _axisSpeedLimits.x);
+            chosen.y = Mathf.Clamp(chosen.y, -_axisSpeedLimits.y, _axisSpeedLimits.y);
 
             _walkCapForDirection = walk.magnitude / input.magnitude;
             _runCapForDirection = sprint.magnitude / input.magnitude;

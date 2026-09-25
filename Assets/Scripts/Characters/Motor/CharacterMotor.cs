@@ -259,6 +259,23 @@ namespace Sanctify.Characters
                 _ignored.Remove(collider);
         }
 
+        /// <summary>
+        /// Whether moving the capsule <paramref name="distance"/> along <paramref name="direction"/>
+        /// would touch <paramref name="body"/>, or it already does. For telling when something is
+        /// right up against the player.
+        /// </summary>
+        public bool WouldTouch(Rigidbody body, Vector3 direction, float distance)
+        {
+            GetCapsulePoints(transform.position, out Vector3 bottom, out Vector3 top, out float radius);
+            int count = Physics.CapsuleCastNonAlloc(bottom, top, radius, direction, _hits, distance + skinWidth, collisionMask, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < count; i++)
+            {
+                if (_hits[i].collider.attachedRigidbody == body)
+                    return true;
+            }
+            return false;
+        }
+
         // ------------------------------------------------------------------
         // Horizontal move with step-up
         // ------------------------------------------------------------------

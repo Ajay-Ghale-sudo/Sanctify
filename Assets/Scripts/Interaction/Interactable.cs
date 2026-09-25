@@ -31,11 +31,14 @@ namespace Sanctify.Interaction
         /// <summary>True while an interaction state (pickup, grab, ...) is working on this prop.</summary>
         public bool IsInteractedWith => _user != null;
 
-        public bool CanFocus(PlayerInteractor interactor, float distance)
-            => !interactionDisabled && !IsInteractedWith && distance <= maxFocusDistance && IsUsableBy(interactor);
+        public bool CanFocus(PlayerInteractor interactor, in RaycastHit hit)
+            => !interactionDisabled && !IsInteractedWith && hit.distance <= maxFocusDistance && IsUsableBy(interactor, hit);
 
-        /// <summary>Whether the prop can be used right now, e.g. only in the cursor mode. Props that can't aren't focused.</summary>
-        protected virtual bool IsUsableBy(PlayerInteractor interactor) => true;
+        /// <summary>
+        /// Whether the prop can be used right now, where the focus ray hit it: e.g. only in the
+        /// cursor mode, or only within arm's reach. Props that can't aren't focused.
+        /// </summary>
+        protected virtual bool IsUsableBy(PlayerInteractor interactor, in RaycastHit hit) => true;
 
         /// <param name="body">The rigidbody the focus ray hit, if any.</param>
         /// <param name="hitPoint">Where the focus ray hit, in world space.</param>

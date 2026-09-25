@@ -29,6 +29,10 @@ namespace Sanctify.Characters.Player
         AxisRamp _yaw;
         AxisRamp _pitch;
 
+        bool _hasTurnAnchor;
+        float _turnAnchorYaw;
+        float _awayTurnScale = 1f;
+
         public PlayerLookSettings Settings => settings;
         /// <summary>Body yaw in degrees.</summary>
         public float Yaw { get; private set; }
@@ -80,6 +84,10 @@ namespace Sanctify.Characters.Player
             float yawVelocity = UpdateAxis(ref _yaw, yawInput, yawTop, deltaTime);
             float pitchVelocity = UpdateAxis(ref _pitch, pitchInput, pitchTop, deltaTime);
 
+            // Turning away from the anchor is slowed; turning back toward it isn't.
+            if (_hasTurnAnchor && yawVelocity * Mathf.DeltaAngle(_turnAnchorYaw, Yaw) > 0f)
+                yawVelocity *= _awayTurnScale;
+
             Yaw = Mathf.Repeat(Yaw + yawVelocity * deltaTime, 360f);
             ApplyYaw();
 
@@ -95,6 +103,22 @@ namespace Sanctify.Characters.Player
 
             AngularVelocity = new Vector2(yawVelocity, pitchVelocity);
         }
+
+        /// <summary>
+        /// Slows turning away from a direction, e.g. from something being dragged: while the view
+        /// turns away from <paramref name="anchorYaw"/>, yaw speed is scaled by
+        /// <paramref name="awayScale"/>. Turning back toward it is unaffected. Lasts until
+        /// <see cref="ClearTurnAnchor"/>; set it again each frame to follow something that moves.
+        /// </summary>
+        /// <param name="awayScale">Share of the normal yaw speed when turning away, 0..1.</param>
+        public void SetTurnAnchor(float anchorYaw, float awayScale)
+        {
+            _hasTurnAnchor = true;
+            _turnAnchorYaw = anchorYaw;
+            _awayTurnScale = Mathf.Clamp01(awayScale);
+        }
+
+        public void ClearTurnAnchor() => _hasTurnAnchor = false;
 
         /// <summary>Instantly sets the facing. For spawning, cutscene hand-back, etc.</summary>
         public void SetLook(float yawDegrees, float pitchDegrees)

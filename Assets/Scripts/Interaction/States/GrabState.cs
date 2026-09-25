@@ -6,17 +6,20 @@ namespace Sanctify.Interaction
     /// <summary>
     /// Carries a physics prop, dragged by the point that was grabbed. A spring pulls that point
     /// toward the cursor ray at the held depth, damped against the player's own motion: walking
-    /// carries the object along, while dragging the cursor or turning makes it trail and swing.
-    /// The pull is capped in newtons, so heavy objects lag further behind. Props with
-    /// <see cref="GrabData.holdOrientation"/> also keep the angle they had when grabbed,
-    /// relative to the view (Amnesia's behaviour).
+    /// carries the object along, while moving the cursor or turning makes it trail a little. It's
+    /// critically damped, so the point stops on the cursor instead of sailing past. The pull is
+    /// capped in newtons, so heavy objects lag further behind, and they're brought in no faster
+    /// than the cap can stop them. Props with <see cref="GrabData.holdOrientation"/> also keep
+    /// the angle they had when grabbed, relative to the view (Amnesia's behaviour).
     ///
-    /// Gravity stays on. The grabbed point carries the weight like a pivot, so the rest of the
-    /// object swings down and hangs from where it was grabbed, and the swing is damped about that
-    /// point until it settles. The body doesn't collide with the
-    /// player while held. Letting go caps its speed, so whipping the view can't fling it;
-    /// throwing is the only way to launch it, and its mass decides how fast. The state ends
-    /// itself if the object is snagged and left behind, or stays out of sight too long.
+    /// Gravity stays on. The grabbed point is held as a pivot would be: it carries the weight, and
+    /// neither the object's swing nor the damping of it moves the point. So the rest of the object
+    /// swings down and hangs from where it was grabbed, about the cursor, and settles there. It
+    /// can only be grabbed within arm's reach, and anything grabbed from farther than the hold
+    /// distance is drawn in to it. The body doesn't collide with the player while held. Letting
+    /// go caps its speed, so whipping the view can't fling it; throwing is the only way to launch
+    /// it, and its mass decides how fast. The state ends itself if the object is snagged and left
+    /// behind, or stays out of sight too long.
     ///
     /// Only reachable in the cursor mode (see <see cref="PhysicsProp"/>), where Interact toggles:
     /// the press that grabbed went to the default state, so the next one lets go. Attack throws.
@@ -32,8 +35,13 @@ namespace Sanctify.Interaction
         // Swing damping may take at most this fraction of the spin in one step, so it can't reverse it.
         const float MaxSwingDampingPerStep = 0.5f;
         const float MinInertia = 1e-6f;
+        const float MinMass = 1e-4f;
+        // Keeps stiffness / damping finite, since the pull is worked out as a wanted speed.
+        const float MinDamping = 0.01f;
+        // A heavy object is brought in slowly enough to stop using this share of the strongest
+        // pull, leaving the rest to keep up with the cursor while it brakes.
+        const float BrakingShare = 0.6f;
 
-        readonly PD3 _pullPd = new(0f, 0f);
         readonly PD3 _spinPd = new(0f, 0f);
 
         PlayerGrabSettings _settings;
@@ -43,6 +51,8 @@ namespace Sanctify.Interaction
         Quaternion _localRotation; // relative to the view, for orientation holding
         bool _orient;
         float _depth;
+        float _holdDepth;          // what a far grab is drawn in to
+        bool _drawingIn;
         float _pointDepth;
         float _breakDistance;
         float _unseenTime;
@@ -69,7 +79,7 @@ namespace Sanctify.Interaction
         /// Where the grabbed point is drawn this frame (the interpolated pose, not the physics
         /// one), so the cursor can sit on the object rather than on where it's being pulled.
         /// </summary>
-        public bool TryGetDrawnGrabPoint(out Vector3 point)
+        public override bool TryGetDrawnGrabPoint(out Vector3 point)
         {
             if (!_holding || Body == null)
             {
@@ -82,15 +92,15 @@ namespace Sanctify.Interaction
         }
 
         public override bool CanEnter(in InteractionContext context)
-        {
-            Rigidbody body = context.Body;
-            if (body == null || body.isKinematic)
-                return false;
+            => IsHoldable(context.Body) && InReach(Interactor, context.HitPoint);
 
-            // Grabbing what you stand on would drop you through it.
-            Collider ground = Interactor.Motor.GroundCollider;
-            return ground == null || ground.attachedRigidbody != body;
-        }
+        /// <summary>
+        /// Whether a point is close enough to grab: within Grab Reach of the side of the player's
+        /// body, measured flat. <see cref="PhysicsProp"/> only lets loose objects be focused where
+        /// this holds.
+        /// </summary>
+        public static bool InReach(PlayerInteractor interactor, Vector3 point)
+            => interactor.ReachTo(point) <= interactor.GrabSettings.grabReach;
 
         public override void Enter()
         {
@@ -118,9 +128,12 @@ namespace Sanctify.Interaction
             }
 
             // The grabbed point starts on the cursor ray, drawn slightly toward the eye, so
-            // grabbing never makes the object jump.
+            // grabbing never makes the object jump. From farther than the hold distance, it's
+            // then drawn in to it.
             float grabDepth = Mathf.Max(Vector3.Dot(HitPoint - aim.origin, aim.direction), 0f);
             _depth = _data.useFixedDepth ? _data.depth : Mathf.Max(grabDepth - _settings.grabPull, _data.minDepth);
+            _holdDepth = Mathf.Clamp(_settings.holdDistance, _data.minDepth, _data.maxDepth);
+            _drawingIn = !_data.useFixedDepth && _depth > _holdDepth;
             _pointDepth = grabDepth;
 
             _savedMass = Body.mass;
@@ -137,11 +150,8 @@ namespace Sanctify.Interaction
             float startDistance = Vector3.Distance(aim.origin, GrabPoint);
             _breakDistance = Mathf.Max(startDistance, _data.maxDepth, _depth) * BreakDistanceScale + BreakDistanceSlack;
 
-            _pullPd.P = _settings.stiffness;
-            _pullPd.D = _settings.damping;
             _spinPd.P = Mathf.Min(_settings.spinCatchUp, MaxSpinCatchUpPerStep / Time.fixedDeltaTime);
             _spinPd.D = 0f;
-            _pullPd.Reset();
             _spinPd.Reset();
 
             _holding = true;
@@ -151,11 +161,16 @@ namespace Sanctify.Interaction
         // Controls
         // ------------------------------------------------------------------
 
-        /// <summary>Moves the object away (positive) or closer (negative), in metres, within the prop's range.</summary>
+        /// <summary>
+        /// Moves the object away (positive) or closer (negative), in metres, within the prop's
+        /// range. Takes over from drawing it in.
+        /// </summary>
         public void AdjustDepth(float metres)
         {
-            if (_holding)
-                _depth = Mathf.Clamp(_depth + metres, _data.minDepth, _data.maxDepth);
+            if (!_holding || metres == 0f)
+                return;
+            _drawingIn = false;
+            _depth = Mathf.Clamp(_depth + metres, _data.minDepth, _data.maxDepth);
         }
 
         /// <summary>
@@ -230,24 +245,39 @@ namespace Sanctify.Interaction
                 return;
             }
 
-            // The PD gives the grabbed point's wanted acceleration, damped against the player's
+            if (_drawingIn)
+            {
+                _depth = Mathf.MoveTowards(_depth, _holdDepth, _settings.drawInSpeed * deltaTime);
+                _drawingIn = _depth > _holdDepth;
+            }
+
+            // The pull is the grabbed point's wanted acceleration, damped against the player's
             // motion rather than the goal's, so the cursor and view lead and the object follows,
             // while walking doesn't leave it behind. The point's effective mass turns that into
             // the force to apply there.
             Vector3 goal = KeepOutOfPlayer(aim.origin + aim.direction * _depth + view.rotation * _viewOffset, view);
             Vector3 relativeVelocity = Body.GetPointVelocity(point) - Interactor.Movement.Velocity;
             Matrix4x4 pointMass = EffectiveMassAt(Body, point);
-            Vector3 pull = pointMass.MultiplyVector(_pullPd.Output(goal - point, -relativeVelocity));
+            float maxPull = _settings.maxPullForce * _data.forceMultiplier;
+            Vector3 pull = pointMass.MultiplyVector(PullAcceleration(goal - point, relativeVelocity, pointMass, maxPull));
             pull = Vector3.ClampMagnitude(pull, _settings.maxPullForce) * _data.forceMultiplier;
 
             if (!_orient)
             {
-                // Carry the weight at the grabbed point, as a pivot would: the force that keeps
-                // the point itself from falling, while gravity swings the rest down below it.
-                // Outside the pull cap, so heavy things lag behind rather than drop.
-                Vector3 support = Body.useGravity ? pointMass.MultiplyVector(-Physics.gravity) : Vector3.zero;
-                Body.AddForceAtPosition(pull + support, point);
-                DampSwing(point, deltaTime);
+                // Hold the grabbed point as a pivot would. On top of the pull, it gets whatever
+                // force keeps the point itself from falling, from being carried round by the
+                // object's spin, and from being shoved by the swing damping. So the rest of the
+                // object swings and settles about the cursor instead of dragging it. Outside the
+                // pull cap, so heavy things lag behind rather than drop.
+                Vector3 swingTorque = SwingDampingTorque(point, deltaTime);
+                Vector3 r = point - Body.worldCenterOfMass;
+                Vector3 spin = Body.angularVelocity;
+                Vector3 disturbance = Vector3.Cross(spin, Vector3.Cross(spin, r))
+                                    + Vector3.Cross(InverseInertiaTimes(Body, swingTorque), r);
+                if (Body.useGravity)
+                    disturbance += Physics.gravity;
+                Body.AddForceAtPosition(pull - pointMass.MultiplyVector(disturbance), point);
+                Body.AddTorque(swingTorque);
                 return;
             }
 
@@ -278,7 +308,7 @@ namespace Sanctify.Interaction
         /// point is lighter than the whole body: a plank's end is a quarter of its mass, a box's
         /// corner less still. Sizing the pull by the whole mass overdrove such points past what
         /// one physics step can settle, and they buzzed and spun. Leaves out the spin's own
-        /// centripetal pull, which the spring absorbs.
+        /// centripetal pull, which the caller adds where it holds the point as a pivot.
         /// </summary>
         static Matrix4x4 EffectiveMassAt(Rigidbody body, Vector3 point)
         {
@@ -299,19 +329,42 @@ namespace Sanctify.Interaction
         }
 
         /// <summary>
-        /// Brakes the body's spin as if it turned about the grabbed point. A Rigidbody's angular
-        /// damping acts about the centre of mass, but a hanging object swings about the point,
-        /// and most of that motion is the centre of mass travelling round it, which angular
-        /// damping never touches: a ball held at its surface kept swinging for seconds. This
-        /// brakes the angular momentum about the point instead, so everything settles at the
-        /// same rate whatever its shape.
+        /// The grabbed point's wanted acceleration: a spring toward the goal, damped against the
+        /// player's motion. It's worked out as a wanted speed toward the goal (stiffness ÷ damping
+        /// × the gap) and a damper that brings the point to that speed, which is the same spring
+        /// and damper. Written that way, the speed can be capped at what the capped pull can
+        /// still stop from within the gap, so something heavy that's got going arrives and stops
+        /// instead of sailing past the cursor.
         /// </summary>
-        void DampSwing(Vector3 point, float deltaTime)
+        Vector3 PullAcceleration(Vector3 error, Vector3 relativeVelocity, Matrix4x4 pointMass, float maxPull)
+        {
+            float damping = Mathf.Max(_settings.damping, MinDamping);
+            Vector3 wantedVelocity = error * (_settings.stiffness / damping);
+            float distance = error.magnitude;
+            if (distance > 1e-4f)
+            {
+                // Force per m/s² along the gap, so the braking the cap allows can be found.
+                float massAlong = pointMass.MultiplyVector(error / distance).magnitude;
+                float braking = BrakingShare * maxPull / Mathf.Max(massAlong, MinMass);
+                wantedVelocity = Vector3.ClampMagnitude(wantedVelocity, Mathf.Sqrt(2f * braking * distance));
+            }
+            return damping * (wantedVelocity - relativeVelocity);
+        }
+
+        /// <summary>
+        /// Torque that brakes the body's spin as if it turned about the grabbed point. A
+        /// Rigidbody's angular damping acts about the centre of mass, but a hanging object swings
+        /// about the point, and most of that motion is the centre of mass travelling round it,
+        /// which angular damping never touches: a ball held at its surface kept swinging for
+        /// seconds. This brakes the angular momentum about the point instead, so everything
+        /// settles at the same rate whatever its shape. The caller keeps the point itself still.
+        /// </summary>
+        Vector3 SwingDampingTorque(Vector3 point, float deltaTime)
         {
             Vector3 spin = Body.angularVelocity;
             float speed = spin.magnitude;
             if (speed < 1e-4f)
-                return;
+                return Vector3.zero;
 
             Vector3 r = Body.worldCenterOfMass - point;
             Vector3 momentum = InertiaTimes(Body, spin) + Body.mass * Vector3.Cross(r, Vector3.Cross(spin, r));
@@ -323,7 +376,7 @@ namespace Sanctify.Interaction
             float limit = MaxSwingDampingPerStep * speed;
             if (change > limit)
                 torque *= limit / change;
-            Body.AddTorque(torque);
+            return torque;
         }
 
         static Vector3 InertiaTimes(Rigidbody body, Vector3 vector)

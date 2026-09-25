@@ -8,6 +8,7 @@ namespace Sanctify.Interaction
         Default,
         Pickup,
         Grab,
+        Drag,
     }
 
     /// <summary>Buttons routed through the interaction state. Look and movement have their own hooks.</summary>

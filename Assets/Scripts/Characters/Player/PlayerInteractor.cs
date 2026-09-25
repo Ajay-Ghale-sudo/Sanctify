@@ -61,6 +61,8 @@ namespace Sanctify.Characters.Player
         public float Range => range;
         public CharacterMotor Motor { get; private set; }
         public PlayerMovement Movement { get; private set; }
+        /// <summary>For states that steer the view. Null on a rig without look.</summary>
+        public PlayerLook Look { get; private set; }
         public PlayerGrabSettings GrabSettings { get; private set; }
         public PlayerCollisionFilter CollisionFilter { get; private set; }
 
@@ -135,6 +137,7 @@ namespace Sanctify.Characters.Player
 
             Motor = GetComponent<CharacterMotor>();
             Movement = GetComponent<PlayerMovement>();
+            Look = GetComponent<PlayerLook>();
             _cameraRig = GetComponentInChildren<PlayerCameraRig>();
             _camera = rayOrigin != null ? rayOrigin.GetComponent<Camera>() : null;
             CollisionFilter = new PlayerCollisionFilter(Motor);
@@ -150,6 +153,7 @@ namespace Sanctify.Characters.Player
             _states.Add(InteractionStateId.Default, _default);
             _states.Add(InteractionStateId.Pickup, new PickupState(this));
             _states.Add(InteractionStateId.Grab, new GrabState(this));
+            _states.Add(InteractionStateId.Drag, new DragState(this));
 
             Current = _default;
             Current.Enter();
@@ -304,6 +308,16 @@ namespace Sanctify.Characters.Player
                 nearest = hit;
             }
             return nearestDistance < float.MaxValue;
+        }
+
+        /// <summary>
+        /// How far past the side of the player's body a point is, measured flat: how far the arms
+        /// have to reach for it, bending as needed. Negative inside the capsule.
+        /// </summary>
+        public float ReachTo(Vector3 point)
+        {
+            Transform body = Motor.transform;
+            return Vector3.ProjectOnPlane(point - body.position, body.up).magnitude - Motor.Radius;
         }
 
         /// <summary>Where a world point shows in the rendered view, 0..1 with y up. False if it's behind the camera.</summary>

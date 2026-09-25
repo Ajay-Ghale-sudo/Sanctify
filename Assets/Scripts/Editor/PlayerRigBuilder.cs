@@ -155,6 +155,7 @@ namespace Sanctify.Editor
 
             CreateInteractionTests(parent);
             CreateGrabTests(parent);
+            CreateDragTests(parent);
             UpgradePlayerRigs();
 
             Selection.activeGameObject = arena;
@@ -216,8 +217,8 @@ namespace Sanctify.Editor
             GrabProp(parent, PrimitiveType.Sphere, "Ball", new Vector3(0f, 0.865f, -10.5f), Vector3.one * 0.22f, 0.5f, standard);
             GrabProp(parent, PrimitiveType.Cube, "Brick", new Vector3(0.6f, 0.785f, -10.5f), new Vector3(0.2f, 0.06f, 0.1f), 1.5f, dense);
 
-            // Heavier things on the floor: they trail the cursor and barely leave the hand when thrown.
-            // The chest is past the full-slowdown mass and well past what Max Pull Force moves briskly.
+            // Heavier things on the floor: the crate trails the cursor and barely leaves the hand
+            // when thrown. The chest is over the 20 kg lift limit, so it's dragged instead.
             GrabProp(parent, PrimitiveType.Cube, "Crate", new Vector3(-2.2f, 0.255f, -10.5f), Vector3.one * 0.5f, 8f, standard);
             GrabProp(parent, PrimitiveType.Cube, "Heavy Chest", new Vector3(2.4f, 0.255f, -10.5f), new Vector3(0.8f, 0.5f, 0.5f), 25f, standard);
             GrabProp(parent, PrimitiveType.Cube, "Plank", new Vector3(1.2f, 0.03f, -12.2f), new Vector3(0.1f, 0.05f, 1.2f), 2f, standard);
@@ -226,6 +227,23 @@ namespace Sanctify.Editor
             // Something to throw at
             for (int i = 0; i < 3; i++)
                 GrabProp(parent, PrimitiveType.Cube, $"Target Box {i + 1}", new Vector3(0f, 0.155f + i * 0.305f, -15f), Vector3.one * 0.3f, 1f, standard);
+        }
+
+        /// <summary>
+        /// Props too heavy to lift, which are dragged: a crate on open floor, a block heavy enough
+        /// to crawl, and a crate inside the narrowing corridor that jams against its walls.
+        /// </summary>
+        static void CreateDragTests(Transform arena)
+        {
+            var standard = GetOrCreateAsset<GrabData>("SO_Grab_Default", InteractionSettingsFolder);
+
+            var group = new GameObject("DragTests");
+            group.transform.SetParent(arena, false);
+            Transform parent = group.transform;
+
+            GrabProp(parent, PrimitiveType.Cube, "Heavy Crate", new Vector3(-4.5f, 0.405f, -12f), Vector3.one * 0.8f, 40f, standard).name = "Drag_HeavyCrate";
+            GrabProp(parent, PrimitiveType.Cube, "Stone Block", new Vector3(4.5f, 0.305f, -12.5f), new Vector3(0.9f, 0.6f, 0.9f), 100f, standard).name = "Drag_StoneBlock";
+            GrabProp(parent, PrimitiveType.Cube, "Corridor Crate", new Vector3(0f, 0.405f, 7f), Vector3.one * 0.8f, 40f, standard).name = "Drag_CorridorCrate";
         }
 
         /// <summary>One body, five colliders: every collider must stop touching the player while held.</summary>
