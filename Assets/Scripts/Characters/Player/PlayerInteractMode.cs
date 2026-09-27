@@ -21,6 +21,9 @@ namespace Sanctify.Characters.Player
     ///     Letting go leaves the cursor where the object was
     ///   - while something is held, the bumpers move it nearer or farther instead of strafing;
     ///     while dragging, they do nothing (the drag state stops strafing)
+    ///   - while a door or lever is held, the right stick swings it instead, and while a crank is
+    ///     held, circling the stick turns it; the drawn cursor rides the point grabbed (see
+    ///     <see cref="HingeState"/>, <see cref="CrankState"/>)
     ///   - the triggers raise the player onto their toes or crouch them, instead of pitching
     ///
     /// It sits above the interaction states rather than being one, so the cursor keeps working
@@ -100,9 +103,9 @@ namespace Sanctify.Characters.Player
                 Exit();
         }
 
-        /// <param name="canLook">Whether look controls are allowed this frame.</param>
+        /// <param name="stick">The right stick, zero when look controls aren't allowed or the interaction state has taken it.</param>
         /// <param name="canAct">Whether action controls are allowed this frame. The mode ends when they aren't.</param>
-        public void Tick(float deltaTime, bool canLook, bool canAct)
+        public void Tick(float deltaTime, Vector2 stick, bool canAct)
         {
             if (IsActive && !canAct)
                 Exit();
@@ -115,7 +118,7 @@ namespace Sanctify.Characters.Player
             if (!IsActive)
                 return;
 
-            Vector2 stick = canLook ? Vector2.ClampMagnitude(_input.Peek, 1f) : Vector2.zero;
+            stick = Vector2.ClampMagnitude(stick, 1f);
             Vector2 before = _cursor;
             MoveCursor(stick, deltaTime);
             // A held object leads: the pull target stays within reach of it, and it has to reach

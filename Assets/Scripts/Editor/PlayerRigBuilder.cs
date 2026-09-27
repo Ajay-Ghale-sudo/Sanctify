@@ -4,6 +4,7 @@ using Sanctify.Characters.Player;
 using Sanctify.Debugging;
 using Sanctify.Interaction;
 using UnityEditor;
+using UnityEditor.Events;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -157,6 +158,7 @@ namespace Sanctify.Editor
             CreateGrabTests(parent);
             CreateDragTests(parent);
             CreateDoorTests(parent);
+            CreateMechanismTests(parent);
             UpgradePlayerRigs();
 
             Selection.activeGameObject = arena;
@@ -387,6 +389,123 @@ namespace Sanctify.Editor
             joint.xDrive = new JointDrive { positionDamper = 1000f, maximumForce = float.MaxValue }; // friction when let go
 
             SetReference(door.GetComponent<Door>(), "bolt", joint);
+        }
+
+        /// <summary>
+        /// Four lift gates in a row north-west of the arena centre, each worked from beside it,
+        /// on its south side: a crank that slowly unwinds unless wound all the way, a stiff one
+        /// that always unwinds, a lever that switches back and forth, and one that locks on. A
+        /// crate to wedge under the crank gates lies south of them.
+        /// </summary>
+        static void CreateMechanismTests(Transform arena)
+        {
+            var group = new GameObject("MechanismTests");
+            group.transform.SetParent(arena, false);
+            Transform parent = group.transform;
+            // Mechanisms stand beside their gate, east and a little toward the player.
+            var beside = new Vector3(1.3f, 0f, -0.4f);
+
+            // Cranks: the gate follows how far it's wound, fast enough to keep up, and a crate
+            // under it stops both. The crate is light enough to carry under a gate.
+            var gate = LiftGateway(parent, "Crank Gate", new Vector3(-17f, 0f, 14f), 4f);
+            CrankOnPillar(parent, "Crank", new Vector3(-17f, 0f, 14f) + beside, gate, maxTurns: 3f, resistance: 1f, unwindSpeed: 0.1f, holdsWhenFull: true);
+
+            gate = LiftGateway(parent, "Heavy Crank Gate", new Vector3(-14f, 0f, 14f), 4f);
+            CrankOnPillar(parent, "Heavy Crank", new Vector3(-14f, 0f, 14f) + beside, gate, maxTurns: 2f, resistance: 2f, unwindSpeed: 0.25f, holdsWhenFull: false);
+
+            var standard = GetOrCreateAsset<GrabData>("SO_Grab_Default", InteractionSettingsFolder);
+            GrabProp(parent, PrimitiveType.Cube, "Wedge Crate", new Vector3(-15.5f, 0.255f, 12f), Vector3.one * 0.5f, 8f, standard);
+
+            // Levers: on opens the gate, off shuts it.
+            gate = LiftGateway(parent, "Lever Gate", new Vector3(-11f, 0f, 14f), 0.5f);
+            var lever = FloorLever(parent, "Lever", new Vector3(-11f, 0f, 14f) + beside, lockWhenOn: false);
+            UnityEventTools.AddBoolPersistentListener(lever.OnSwitchedOn, gate.SetOpen, true);
+            UnityEventTools.AddBoolPersistentListener(lever.OnSwitchedOff, gate.SetOpen, false);
+
+            gate = LiftGateway(parent, "Locking Lever Gate", new Vector3(-8f, 0f, 14f), 0.5f);
+            lever = FloorLever(parent, "Locking Lever", new Vector3(-8f, 0f, 14f) + beside, lockWhenOn: true);
+            UnityEventTools.AddBoolPersistentListener(lever.OnSwitchedOn, gate.SetOpen, true);
+        }
+
+        /// <summary>
+        /// Two tall posts and a beam, with a gate between them that rises its own height. There's
+        /// no wall either side: it only has to be seen to open.
+        /// </summary>
+        static LiftGate LiftGateway(Transform parent, string name, Vector3 position, float speed)
+        {
+            const float frameHeight = DoorHeight * 2f + 0.4f;
+            float halfOpening = DoorWidth * 0.5f + DoorGap;
+            Block(parent, $"{name} Post W", position + new Vector3(-halfOpening - PostWidth * 0.5f, frameHeight * 0.5f, 0f), new Vector3(PostWidth, frameHeight, 0.2f));
+            Block(parent, $"{name} Post E", position + new Vector3(halfOpening + PostWidth * 0.5f, frameHeight * 0.5f, 0f), new Vector3(PostWidth, frameHeight, 0.2f));
+            Block(parent, $"{name} Beam", position + new Vector3(0f, frameHeight + 0.15f, 0f), new Vector3((halfOpening + PostWidth) * 2f, 0.3f, 0.2f));
+
+            var go = Block(parent, name, position + new Vector3(0f, DoorHeight * 0.5f, 0f), new Vector3(halfOpening * 2f - 0.04f, DoorHeight, 0.08f));
+            var body = go.AddComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+            var gate = go.AddComponent<LiftGate>();
+            SetFloat(gate, "lift", DoorHeight);
+            SetFloat(gate, "speed", speed);
+            return gate;
+        }
+
+        /// <summary>
+        /// A square plate with a knob, facing south at chest height on a pillar, so the knob
+        /// visibly goes round.
+        /// </summary>
+        static Crank CrankOnPillar(Transform parent, string name, Vector3 position, LiftGate gate,
+            float maxTurns, float resistance, float unwindSpeed, bool holdsWhenFull)
+        {
+            Block(parent, $"{name} Pillar", position + new Vector3(0f, 0.6f, 0.2f), new Vector3(0.3f, 1.2f, 0.3f));
+
+            var root = new GameObject(name);
+            root.transform.SetParent(parent, false);
+            root.transform.localPosition = position + new Vector3(0f, 1f, 0f);
+            root.transform.localRotation = Quaternion.LookRotation(Vector3.back); // forward toward the player
+            Block(root.transform, "Plate", Vector3.zero, new Vector3(0.36f, 0.36f, 0.04f));
+            Block(root.transform, "Knob", new Vector3(0f, 0.13f, 0.07f), new Vector3(0.05f, 0.05f, 0.1f));
+            root.AddComponent<Rigidbody>().isKinematic = true; // a collider that moves
+
+            var crank = root.AddComponent<Crank>();
+            SetFloat(crank, "maxTurns", maxTurns);
+            SetFloat(crank, "resistance", resistance);
+            SetFloat(crank, "unwindSpeed", unwindSpeed);
+            SetBool(crank, "holdsWhenFull", holdsWhenFull);
+            SetReference(crank, "gate", gate);
+            SetString(crank, "focusText", name);
+            return crank;
+        }
+
+        /// <summary>
+        /// A floor lever on a low base, pivoting about east-west, ±35°. Built upright; at load it
+        /// falls toward the player, which is off, and pushing it away turns it on.
+        /// </summary>
+        static Lever FloorLever(Transform parent, string name, Vector3 position, bool lockWhenOn)
+        {
+            Block(parent, $"{name} Base", position + new Vector3(0f, 0.1f, 0f), new Vector3(0.3f, 0.2f, 0.3f));
+
+            var root = new GameObject(name);
+            root.transform.SetParent(parent, false);
+            root.transform.localPosition = position + new Vector3(0f, 0.2f, 0f); // the pivot, on top of the base
+            // The arm starts a little above the pivot, so it clears the base when tilted.
+            Block(root.transform, "Arm", new Vector3(0f, 0.5f, 0f), new Vector3(0.05f, 0.9f, 0.05f));
+            Block(root.transform, "Grip", new Vector3(0f, 0.95f, 0f), new Vector3(0.14f, 0.08f, 0.08f));
+
+            var body = root.AddComponent<Rigidbody>();
+            body.mass = 3f;
+            body.useGravity = false; // the lever's own spring holds it at an end
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+
+            var hinge = root.AddComponent<HingeJoint>();
+            hinge.anchor = Vector3.zero;
+            hinge.axis = Vector3.right; // on is toward +z, away from the player
+            hinge.useLimits = true;
+            hinge.limits = new JointLimits { min = -35f, max = 35f };
+
+            var lever = root.AddComponent<Lever>();
+            SetBool(lever, "lockWhenOn", lockWhenOn);
+            SetString(lever, "focusText", name);
+            return lever;
         }
 
         /// <summary>One body, five colliders: every collider must stop touching the player while held.</summary>

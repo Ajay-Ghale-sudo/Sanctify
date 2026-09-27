@@ -71,8 +71,6 @@ namespace Sanctify.Interaction
         [Min(0f)] public float dragReach = 0.5f;
         [Tooltip("Hardest the player can push or pull, in newtons, applied at the grabbed point against the floor's friction. Decides what moves at all and how quickly it gets going. With the default 0.6 friction, about 110 kg is the most that budges.")]
         [Min(1f)] public float dragStrength = 650f;
-        [Tooltip("Hardest the player can push or pull something jointed, such as a door by its handle, in newtons. Kept low so a prop heavier than Max Lift Mass wedged against a door holds it.")]
-        [Min(1f)] public float jointedDragStrength = 200f;
         [Tooltip("Seconds to put full strength into a push or pull. Heavy things wait until the effort builds past their friction.")]
         [Min(0.01f)] public float dragLeanTime = 0.4f;
         [Tooltip("Top pace for an object just over Max Lift Mass, in m/s. The push eases off as it nears this, and the player never moves faster than the grabbed point does.")]
@@ -88,6 +86,14 @@ namespace Sanctify.Interaction
         [Range(10f, 180f)] public float dragLetGoAngle = 60f;
         [Tooltip("Turning away from the grabbed point slows the further it's turned: from full speed facing it down to this share of full speed at the let-go angle. Turning back toward it is always full speed.")]
         [Range(0.05f, 1f)] public float dragSlowestTurn = 0.25f;
+
+        [Header("Doors")]
+        [Tooltip("How fast an instant flick of the right stick, from the centre to the edge, tries to swing a held door, as the speed of the grabbed point in m/s. Slower pushes of the stick ask for less. Door Strength limits how quickly it gets there.")]
+        [Min(0.05f)] public float doorFlickSpeed = 4f;
+        [Tooltip("Seconds a push of the stick keeps shoving the door, fading as it goes. Longer makes slow pushes stronger and flicks harder.")]
+        [Min(0.02f)] public float doorFlickTime = 0.15f;
+        [Tooltip("Hardest the player can push or pull a door at the grabbed point, in newtons. Kept low so a heavy prop wedged against a door holds it, and heavy doors get going slowly.")]
+        [Min(1f)] public float doorStrength = 200f;
 
         public bool IsTooHeavyToLift(float mass) => mass > maxLiftMass;
 

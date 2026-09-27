@@ -154,6 +154,8 @@ namespace Sanctify.Characters.Player
             _states.Add(InteractionStateId.Pickup, new PickupState(this));
             _states.Add(InteractionStateId.Grab, new GrabState(this));
             _states.Add(InteractionStateId.Drag, new DragState(this));
+            _states.Add(InteractionStateId.Hinge, new HingeState(this));
+            _states.Add(InteractionStateId.Crank, new CrankState(this));
 
             Current = _default;
             Current.Enter();
@@ -168,6 +170,7 @@ namespace Sanctify.Characters.Player
 
         public bool RouteLook(Vector2 look) => Current.OnLook(look);
         public bool RouteMove(Vector2 move) => Current.OnMove(move);
+        public bool RoutePeek(Vector2 peek) => Current.OnPeek(peek);
 
         public bool RouteAction(InteractionAction action, bool pressed)
         {

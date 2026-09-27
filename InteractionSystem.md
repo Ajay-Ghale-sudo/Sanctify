@@ -1,9 +1,9 @@
 # Sanctify Interaction System
 
-Status as of 2026-09-25. Where this file and the code disagree, the code wins.
+Status as of 2026-09-26. Where this file and the code disagree, the code wins.
 
 - **Part 1, Now.** How the system works today, and the rules for working in this codebase.
-- **Part 2, Doors.** How doors, bolts, blocking and breaking work.
+- **Part 2, Doors and mechanisms.** How doors, bolts, blocking and breaking work, and the levers, cranks and lift gates that work like them.
 - **Part 3, Steps.** What to verify, then a backlog of things to build only when needed.
 
 The Amnesia research write-up and the monster/door write-up this replaces are no longer needed to work here. Everything still relevant from them is below.
@@ -12,7 +12,7 @@ The Amnesia research write-up and the monster/door write-up this replaces are no
 
 # Part 1: Now
 
-A state machine on the player (`PlayerInteractor`) is fed by props (`Interactable` subclasses). A focus ray finds a prop. On Interact, the prop writes an `InteractionContext` and asks for a state. That state owns input and physics until it ends itself. Four states exist: **Default**, **Pickup**, **Grab** (with throw) and **Drag** (push and pull).
+A state machine on the player (`PlayerInteractor`) is fed by props (`Interactable` subclasses). A focus ray finds a prop. On Interact, the prop writes an `InteractionContext` and asks for a state. That state owns input and physics until it ends itself. Six states exist: **Default**, **Pickup**, **Grab** (with throw), **Drag** (push and pull), **Hinge** (doors and levers) and **Crank**.
 
 ## What's built
 
@@ -34,8 +34,9 @@ All paths are under `Assets/Scripts/`.
 | Held-object shadow | `Interaction/HeldObjectShadow.cs` | Built |
 | Cursor and focus text | `Debug/DebugCrosshair.cs` | OnGUI placeholder |
 | Test rig and arena | `Editor/PlayerRigBuilder.cs` | Built |
-| Doors (handle, latch, bolt, blocked state, break) | `Interaction/Door.cs`, `States/DragState.cs` (jointed bodies) | Built 2026-09-25, not yet playtested (Part 2) |
-| HUD, inventory, sounds, switches | | Not started (Part 3 backlog) |
+| Doors (handle swing, latch, self-closing, bolt, blocked state, break) | `Interaction/Door.cs`, `States/HingeState.cs` | Built 2026-09-25, Hinge 2026-09-26, not yet playtested (Part 2) |
+| Levers, cranks, lift gates | `Interaction/Lever.cs`, `Crank.cs`, `States/CrankState.cs`, `LiftGate.cs` | Built 2026-09-26, not yet playtested (Part 2) |
+| HUD, inventory, sounds, buttons | | Not started (Part 3 backlog) |
 
 The 2026-09-25 changes (per-kind reach, no drag reaching phase, grab draw-in, critical damping, braking, pivot hold, leash) were last recorded as not yet compiled or playtested. Step 1 covers that.
 
@@ -54,18 +55,18 @@ The 2026-09-25 changes (per-kind reach, no drag reaching phase, grab draw-in, cr
 ## Frame order and routing
 
 ```
-Update       interactMode.Tick → look (routed) → actions (routed) → interactor.Tick → combat, magic
+Update       right stick (routed) → interactMode.Tick → look (routed) → actions (routed) → interactor.Tick → combat, magic
 FixedUpdate  stance.FixedTick → movement (routed) + motor → interactor.FixedTick (state forces, then collision filter)
 LateUpdate   cameraRig.Tick → interactor.LateTick → interactMode.LateTick (drawn cursor) → heldShadow.LateTick
 ```
 
-- **Routing.** Look, move and actions (`Interact`, `Attack`, `Magic`, press and release) go to the current state first via `RouteLook`, `RouteMove`, `RouteAction`. Return `true` to let the normal action run too, `false` to swallow it. A swallowed Magic release cancels the charge.
+- **Routing.** Look, move, the right stick and actions (`Interact`, `Attack`, `Magic`, press and release) go to the current state first via `RouteLook`, `RouteMove`, `RoutePeek`, `RouteAction`. The right stick is routed before interact mode, so a state that swallows it stops both peek and the cursor. Return `true` to let the normal action run too, `false` to swallow it. A swallowed Magic release cancels the charge.
 - **Look is a rate** (-1..1 from stick or arrow keys, ramped by `PlayerLook`), not a mouse delta.
 - **Control locks.** When `PlayerControlLock` blocks `Actions`, interact mode exits and `PlayerInteractor.Cancel()` returns to Default: held objects drop, unfinished pickups go back.
 
 ## State contract
 
-- **IDs.** `InteractionStateId { Default, Pickup, Grab, Drag }`. Register new states in `PlayerInteractor.Awake`.
+- **IDs.** `InteractionStateId { Default, Pickup, Grab, Drag, Hinge, Crank }`. Register new states in `PlayerInteractor.Awake`.
 - **Entering.** A prop calls `Begin(interactor, id, body, hit)` → `BeginInteraction`, which asks `state.CanEnter(context)` first. A refusal leaves the current state running.
 - **`Enter()`/`Exit()` take no arguments.** `ChangeState` sets `next.Previous` and makes `next` current before `Enter`, so a state can bail out during `Enter`. Leave with `ReturnToPrevious()`; `ChangeState(null)` means Default.
 - **`HeldState`** loads `Prop`, `Body`, `HitPoint` from the context, marks the prop in use, and ends when the prop is destroyed (`PropDestroyed`). Subclasses call `base.Enter()` first and `base.Exit()` last. `IsHoldable` refuses kinematic bodies and whatever the player stands on.
@@ -139,16 +140,16 @@ The player is a kinematic Rigidbody moved by `CharacterMotor`'s own capsule cast
 | Left stick X / ←, → | Turn | Turn; while dragging, slower turning away, let go past 60° |
 | Bumpers / A, D | Strafe | Strafe; while holding, depth; while dragging, nothing |
 | Triggers / ↑, ↓ | Pitch | RT tiptoe, LT crouch |
-| Right stick / IJKL | Peek | Cursor; edge turns the view |
+| Right stick / IJKL | Peek; while holding a door or lever, push it; while holding a crank, circle to turn it | Cursor; edge turns the view; while holding a door, lever or crank, the same as normal mode |
 | R3 / Tab | Enter interact mode | Exit interact mode |
-| Circle / E | Interact at centre (pickups, door handles) | Interact at cursor: grab or drag within reach (door handles too; bolts are grabbed and slid), again to let go |
+| Circle / E | Interact at centre (pickups, door handles, levers, cranks) | Interact at cursor: grab or drag within reach (door handles too; bolts are grabbed and slid), again to let go |
 | Square / left mouse | Attack | Throw if holding |
 | Triangle / F | Magic (swallowed while holding) | Same |
 | Cross / Left Shift | Run | Run |
 
 ## Test tools
 
-**Sanctify → Player** menu: **Create Player Rig In Scene**, **Create Motor Test Arena** (pickup table, stance tests, grab table and floor, throw target, drag crates at (−4.5, −12), stone block at (4.5, −12.5), corridor crate at (0, 7), a door at (15, −4) with a crate beside it, a bolted door at (15, −9), three door-breaking iron props between them, a sealed hut at (15, −14.5)), and **Upgrade Player Rigs In Scene** (extend it whenever the rig gains a component or asset). `PlayerControlLock.Debug Block` tests interruptions; `PlayerInteractor` draws the focus ray on Interact.
+**Sanctify → Player** menu: **Create Player Rig In Scene**, **Create Motor Test Arena** (pickup table, stance tests, grab table and floor, throw target, drag crates at (−4.5, −12), stone block at (4.5, −12.5), corridor crate at (0, 7), a door at (15, −4) with a crate beside it, a bolted door at (15, −9), three door-breaking iron props between them, a sealed hut at (15, −14.5), and four lift gates at z = 14 from x = −17 to −8, worked by two cranks and two levers), and **Upgrade Player Rigs In Scene** (extend it whenever the rig gains a component or asset). `PlayerControlLock.Debug Block` tests interruptions; `PlayerInteractor` draws the focus ray on Interact.
 
 ## Known issues
 
@@ -160,21 +161,45 @@ The player is a kinematic Rigidbody moved by `CharacterMotor`'s own capsule cast
 
 ---
 
-# Part 2: Doors
+# Part 2: Doors and mechanisms
 
-Built 2026-09-25, not yet playtested. A door is a hinged Rigidbody with a `Door` component (`Interaction/Door.cs`) that starts the existing **Drag** state from its handle. Walking pushes and pulls at the handle, and the hinge turns that into a swing.
+Built 2026-09-25, moved to its own state 2026-09-26, not yet playtested. A door is a hinged Rigidbody with a `Door` component (`Interaction/Door.cs`) that starts the **Hinge** state (`States/HingeState.cs`) from its handle. The right stick swings it; the player's walking plays no part.
 
-- **Why Drag, not a new DoorState.** Drag already applies every force at the grabbed point, keeps the body solid to the player, caps the player's speed to the handle, backs the player off when pulling close, and lets go when the player turns away (so a door swung wide releases itself).
-- **Handle only, both modes.** `Door.IsUsableBy` accepts only hits on its `handle` collider, within `DragState.CanTakeHold`, with or without the cursor. One collider through the leaf serves both sides.
+- **Why Hinge, not Drag.** Doors first went through Drag, with walking as the input, so the player had to stay pressed against the door and kept bumping it. Hinge follows Amnesia's rotate states instead: the hand's movement becomes the door's speed directly, so the player stands off it. Like Amnesia's mouse deltas, the stick's movement (not how far it's held) is what pushes, accumulated with a decay.
+- **Handle only, both modes.** `Door.IsUsableBy` accepts only hits on its `handle` collider, within `DragState.CanTakeHold` (0.5 m, facing within 45°), with or without the cursor. One collider through the leaf serves both sides.
+- **Swing.** Moving the stick further out from the centre is the hand moving. Each step, that outward movement (in stick space, in the stick's direction) is added to a flick vector, capped at 1, which fades with time constant `doorFlickTime` (0.15 s). Moving back toward the centre adds nothing, so the stick springing back doesn't undo a flick; holding it still pushes nothing. So a flick piles up to a hard shove, and a slow push stays gentle but keeps going while the stick moves. The flick becomes a push in view space, `view.rotation × (x, y, y)`: up pushes away (and up), sideways pushes across. Only its part along the grabbed point's swing counts, so it works from either side and at any angle. The hand's speed is that × `doorFlickSpeed` (4 m/s at the point, for an instant full flick). The force at the point closes half the gap to it each physics step, sized by the point's effective mass about the hinge (inertia about the hinge ÷ lever²), and capped at `doorStrength` (200 N). The hand only pushes: a door already going faster its way gets no force, so a shoved door swings on under its own momentum until the hinge damper, a limit or something in the way stops it. Pushing the other way catches it.
+- **Holding.** Walking and turning are free; peek and the cursor are off while the state has the right stick (`OnPeek`); in interact mode the drawn cursor rides the handle. It lets go on Interact, when the player is farther from the hinge, measured flat, than 1.2 × the starting distance + 0.5 m (Amnesia's keep-hold), after `lineOfSightGrace` (0.5 s) out of sight, or when the hinge breaks. Attack and Magic are swallowed.
 - **Latch.** A door within `latchAngle` (10°) of closed that nobody holds narrows its hinge limits to ±`latchPlay` (2°), so it clicks shut and stays shut when hit. Using the handle unlatches it.
+- **Self-closing.** An unlatched door nobody holds, with no body touching it, swings itself shut after `closeDelay` (10 s): the hinge spring gets `closeSpring` (3) toward angle 0, against the hinge's damper, until it latches. Any body touching the door (the player, any prop; walls and floors don't count) restarts the wait and stops a close in progress.
 - **Bolt lock.** The bolt is a `PhysicsProp` on a `ConfigurableJoint` to the door, free along the joint's x within its linear limit. It's grabbed and slid in interact mode like any loose object (`SO_Grab_Fixture`, which can't be thrown). It's home past the middle of its travel toward +x, and the joint's connected anchor marks the middle (the builder turns off `autoConfigureConnectedAnchor` so the bolt can start at an end). A latched door with its bolt home is locked. Trying the handle yanks it at `rattleForce` (150 N), toward the player then away, every `yankTime` (0.1 s) for `rattleTime` (0.6 s), so it rattles within the latch play and never opens. Sliding the bolt free unlocks it; sliding it home on a shut door locks it again. It sits on one face, so only that side can reach it.
 - **Bolt friction.** The joint's X Drive damper (1000) holds the bolt where it's left, so a swinging door can't fling it home. It drops to 0 while the bolt is held. The bolt's collider is a trigger, so it can sit in the post without shoving the door.
-- **Blocking.** Props and doors are ordinary dynamic bodies, so a crate in the way stops the door. Drag pushes jointed bodies with `jointedDragStrength` (200 N), not `dragStrength` (650 N), so a crate over about 30 kg holds a door and lighter things get shoved.
-- **State, for monsters.** `Door.State` is `Broken`, else `Locked`, else `Blocked`, else `Closed` (latched), else `Open`. `Blocked` means a `PhysicsProp` of at least `blockingMass` (20 kg) touches the leaf. It's tracked by collision enter and exit, so it survives both bodies sleeping. `IsBlocked`, `IsLocked` and `IsBroken` are public too. A broken door reads `Broken` only until it swaps itself out; after that the Door is destroyed and a stored reference is null.
-- **Break.** `Door.Break()` (also the component's context menu) destroys the HingeJoint. So does a `PhysicsProp` with `breaksDoors` hitting the door at `breakSpeed` (2.5 m/s) or more, which in practice means thrown. Once the joint is really gone, the door tips the slab over, adds a plain `PhysicsProp` (Drag by mass, no focus text) and destroys itself. The slab is then an ordinary loose object: grabbed or dragged anywhere, in interact mode only. A drag on the door in progress ends as the Door goes. There's no damage, pieces or debris yet.
-- **Friction** is the HingeJoint's own spring, with spring 0 and damper 3.
-- **Jointed bodies in Drag** skip the lift and the sideways damping. The joint already holds the point's path, and both would only fight it.
+- **Blocking.** Props and doors are ordinary dynamic bodies, so a crate in the way stops the door. The player pushes a door with at most `doorStrength` (200 N) at the handle, so a crate over about 30 kg holds it and lighter things get shoved. Doors under about 23 kg push with less than that against an obstacle (the gain is sized to the free door).
+- **State, for monsters.** `Door.State` is `Broken`, else `Locked`, else `Blocked`, else `Closed` (latched), else `Open`. `Blocked` means a `PhysicsProp` of at least `blockingMass` (20 kg) touches the leaf. Touching bodies are tracked by collision enter and exit, so it survives both bodies sleeping. `IsBlocked`, `IsLocked` and `IsBroken` are public too. A broken door reads `Broken` only until it swaps itself out; after that the Door is destroyed and a stored reference is null.
+- **Break.** `Door.Break()` (also the component's context menu) destroys the HingeJoint. So does a `PhysicsProp` with `breaksDoors` hitting the door at `breakSpeed` (2.5 m/s) or more, which in practice means thrown. Once the joint is really gone, the door tips the slab over, adds a plain `PhysicsProp` (Drag by mass, no focus text) and destroys itself. The slab is then an ordinary loose object: grabbed or dragged anywhere, in interact mode only. A hold on the door in progress ends as the hinge goes. There's no damage, pieces or debris yet.
+- **Friction** is the HingeJoint's own spring, with spring 0 and damper 3. `Door` turns `useSpring` on and keeps the authored values, adding `closeSpring` only while closing itself.
 - **Hinge angle is measured from the pose at load,** so author doors closed.
+
+## Levers
+
+- **What it is.** A `Lever` is a hinged Rigidbody worked through the **Hinge** state exactly as a door is: a slow push of the stick moves it slowly, a flick throws it across. It's usable in both modes, within `DragState.CanTakeHold`, anywhere on its colliders.
+- **Over-centre spring.** Every step it gets a torque about its axis of `detentStrength` (5 N·m per radian) × its angle from the middle, pushing away from the middle. It rests at whichever end it's nearer and snaps across once past halfway. At load it's nudged toward off, and the spring takes it there.
+- **Angle** is worked out from the body's rotation since load, in the same terms as `angularVelocity` and `AddTorque`, not from `HingeJoint.angle`. So the on side is known in world terms: the end the hinge axis turns it toward by Unity's rotation rule (axis +x, arm up: on is toward +z). Author levers at the middle of their travel with symmetric limits.
+- **Switching.** Within `switchMargin` (5°) of the on end it raises `onSwitchedOn`; back within 5° of the off end, `onSwitchedOff`. Both are plain UnityEvents, so they can call a gate's `SetOpen(bool)`, `Light.enabled`, or anything else with a static argument.
+- **Locking.** With `lockWhenOn`, switching on makes it kinematic and sets `InteractionDisabled`, so a hold on it ends and it can't be focused again.
+
+## Cranks
+
+- **What it is.** A `Crank` isn't a physics body: its own transform turns about its forward axis, which should point toward the player. Interact starts the **Crank** state (`States/CrankState.cs`). It's usable in both modes, within `DragState.CanTakeHold`.
+- **Turning.** With the stick pushed at least 0.6 out, the change in the stick's angle turns the crank, clockwise winding. Rotating the stick is the only way to turn it. `resistance` (1) is stick circles per crank turn. It stops at 0 and at `maxTurns` (3).
+- **Unwinding.** `unwindSpeed` (turns/s) unwinds it whenever nobody holds it; 0 means it stays where it's left. With `holdsWhenFull`, it stays once wound all the way.
+- **Gate.** An optional `gate` (`LiftGate`) is set to how far it's wound on every change. Unwinding, whether by hand or by itself, is clamped to `gate.Reachable`, so a crate or the player under the gate stops the crank where the gate stops, and it can't be unwound further until they move. Winding it back open is never stopped. The gate is referenced directly rather than through the event, because the crank needs the gate's answer back.
+- **Output.** `onTurned` (`UnityEvent<float>`) raises how far it's wound, 0..1, on every change, for anything else.
+- **Holding.** Peek and the cursor are off; in interact mode the drawn cursor rides the point grabbed round. It lets go on Interact or when the player walks away (reach to the crank > 1.2 × the start + 0.5 m). Attack and Magic are swallowed.
+
+## Lift gates
+
+- **What it is.** A `LiftGate` is a door that slides straight up, like a sluice gate: a kinematic body moved with `MovePosition` toward a target height at `speed`. It isn't focusable; levers and cranks drive it through `SetOpen(bool)` and `SetOpenness(float)`.
+- **Blocking.** Closing, it sweeps down one step ahead (plus 2 cm) and comes down no further than 2 cm above anything with a body under it (a prop or the player; floors and walls don't count), so it settles on it rather than crushing it. `IsBlocked` is public for monsters. `Reachable(openness)` answers the same question for a crank before it turns. Rising, it lifts whatever rests on it. Crank gates move at 4 m/s so they keep up with the crank; lever gates at 0.5 m/s.
 
 ---
 
@@ -198,18 +223,31 @@ Built 2026-09-25, not yet playtested. A door is a hinged Rigidbody with a `Door`
 - **Arena** (`CreateDoorTests`, east of the stairs): a free door at (15, −4) with a 40 kg crate beside it, and a door at (15, −9) bolted from its south side. Each is two posts, a lintel and a 0.9 × 2 × 0.06 m, 25 kg leaf hinged on the west post, opening both ways (−100° to 100°). Between the doors lie two 4 kg iron balls and a 5 kg iron weight (`SO_Grab_Dense`, `breaksDoors`). South of them, a 4 × 4 m hut at (15, −14.5) with no way in: its door is bolted on the inside, and its back window is 0.9 × 1.3 m (crouch-sized) with its sill at 1.1 m.
 - **Done when:**
   - [ ] Doors are focused only at the handle, from the centre crosshair and from the cursor.
-  - [ ] Walking forward pushes a door open from either side; walking back pulls it, with the player backing off instead of clipping.
-  - [ ] Turning away from a door swung wide lets go of it, and a released door slows to a stop.
+  - [ ] Holding a door, pushing the stick up slowly opens it slowly, away from you, from either side; flicking it up flings it open. Down does the same toward you. The stick springing back doesn't pull the door back, and holding the stick still does nothing. A shoved door swings on until something stops it; a push the other way catches it. Peek and the cursor don't move meanwhile; in interact mode the cursor rides the handle.
+  - [ ] A flick into a door wedged by the 40 kg crate doesn't shove the crate.
+  - [ ] Walking while holding doesn't move the door. Walking about a metre farther from the hinge lets go. A released door coasts to a stop.
+  - [ ] A door pulled into the player stops against them, and nothing glitches the camera.
   - [ ] A door let go near closed clicks shut and stays shut when a thrown brick hits it.
+  - [ ] A door left open swings itself shut about 10 s later and latches. Standing against it, or a prop against it, stops that, and the 10 s start again once it's clear.
   - [ ] From the north, the bolted door yanks back and forth and won't open. From the south, in interact mode, grabbing the bolt and sliding it west lets the door open. Sliding it back east with the door shut locks it again.
   - [ ] Swinging a door open and shut doesn't move its bolt.
   - [ ] The crate dragged against a door keeps it from swinging that way. The door's context menu → **Log State** prints `Blocked` (and `Locked`, `Closed`, `Open` in the other cases).
   - [ ] The door's context menu → **Break** drops it off its hinges. In interact mode the fallen slab drags from any point, not just the handle.
   - [ ] An iron ball or the iron weight thrown at either door, locked or not, knocks it off its hinges. Set down against a door, they don't.
   - [ ] The hut door rattles from outside. The window shows the bolt inside but can't be reached, and nothing gets the player up to it.
-  - [ ] A door swung into the player stops, and nothing glitches the camera.
 
-If doors feel wrong through Drag (too slow near the handle's arc, or the turn release is annoying), the fallback is starting **Grab** from `Door.HandleInteract` instead, with one exception in `GrabState.Enter` so jointed bodies aren't added to the collision filter. Try Drag first.
+## Step 3: Levers, cranks and lift gates (built, to playtest)
+
+- **Arena** (`CreateMechanismTests`): four lift gates in a row at z = 14, x = −17, −14, −11 and −8, each with its mechanism 1.3 m east of it on the south side. From west to east: a crank (3 turns, resistance 1, unwinds at 0.1 turns/s unless full), a heavy crank (2 turns, resistance 2, always unwinds at 0.25 turns/s), a lever, and a locking lever. An 8 kg wedge crate lies at (−15.5, 12), south of the crank gates.
+- **Done when:**
+  - [ ] At load, both levers fall toward you, to off.
+  - [ ] Holding a lever, a slow push of the stick up eases it away, and past halfway it snaps over; a flick throws it over. Its gate rises. Pulling the lever back shuts the gate, and it can be switched again.
+  - [ ] The locking lever opens its gate, then can't be focused or moved again.
+  - [ ] Holding a crank, circling the stick clockwise winds it and its gate rises with it; anticlockwise lowers it. Pushing the stick up and down does nothing. The knob visibly goes round, and in interact mode the cursor follows it.
+  - [ ] The first crank stops after 3 turns and stays there when let go; let go short of that, it slowly unwinds and its gate slowly comes down. The heavy crank takes two circles per turn, stops after 2 turns, and always unwinds when let go, its gate following it down.
+  - [ ] With the wedge crate under a crank gate, cranking it shut (or letting it unwind) brings the gate down onto the crate and stops the crank there: circling anticlockwise does nothing until the crate is moved, and then it carries on. Winding it open still works.
+  - [ ] A crate, or the player, under a closing lever gate stops it until moved.
+  - [ ] Walking away lets go of a lever or crank.
 
 ## Backlog: build only when needed
 
@@ -218,8 +256,11 @@ If doors feel wrong through Drag (too slow near the handle's arc, or the turn re
 | Door damage and debris | Something deals damage (no damage system exists yet) | A `Damageable` with health and toughness (damage 0 if strength < toughness − 1, half if equal) that calls `Door.Break()` at 0 health; it replaces `PhysicsProp.breaksDoors`; later, a broken prefab whose pieces get the door's velocity plus an outward `VelocityChange` |
 | Keys | A level needs one | A `locked` flag on `Door` ANDed into `IsLocked`, cleared by a key `PickupItem`'s On Pickup |
 | Monster door handling | Monsters exist | Stuck counter (real speed < 30% of wanted) + overlap a `Door` ahead → bash until broken, with a timeout; see the monsters write-up |
-| Switches and levers | A puzzle needs one | A `SwitchProp : Interactable` that invokes a `UnityEvent<bool>` |
-| Drawers | A level has one | `Door` on a `ConfigurableJoint` body; `Door` treats a missing HingeJoint as broken, so latch and state need a no-hinge path |
+| Buttons | A puzzle needs one | A `ButtonProp : Interactable` that invokes a UnityEvent on Interact |
+| Lever push following the handle | Levers mounted at odd angles feel wrong | Tilt the push's reference axes toward where the handle points (Amnesia's lever) |
+| Physical cranks | A crank must be stopped by something in the world | A HingeJoint body driven toward the crank angle, counting turns past ±180° |
+| Drawers | A level has one | A slide variant of `HingeState`: dot the push with the slide axis and drive linear speed. `Door` treats a missing HingeJoint as broken, so drawers need their own component or a no-hinge path |
+| Slam | Asked for | One impulse at the handle on Attack while holding a door |
 | HUD, per-prop crosshair, pickup outline | Before the first playable level | One UI element for dot and cursor on the `FixedAspectRenderer` canvas; replace `DebugCrosshair` |
 | Inventory | Items need to be used | `ItemDefinition` ScriptableObject + `Inventory.TryAdd`; `PickupItem.Take()` calls it (refusal already restores the item) |
 | Sounds | The Steam Audio setup exists | Ask the user first |

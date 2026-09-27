@@ -5,10 +5,11 @@ using UnityEngine;
 namespace Sanctify.Interaction
 {
     /// <summary>
-    /// A hinged door, pushed and pulled by its handle through the <see cref="DragState"/>, in
-    /// either mode. Props stop it by just being in the way: the door and the props are all
+    /// A hinged door, swung by its handle with the right stick through the <see cref="HingeState"/>,
+    /// in either mode. Props stop it by just being in the way: the door and the props are all
     /// ordinary dynamic bodies. A door left near closed latches: its hinge limits narrow to a
-    /// little play, so it stays shut when hit until someone works the handle. A latched door
+    /// little play, so it stays shut when hit until someone works the handle. One left open swings
+    /// itself shut after Close Delay, unless something is against it. A latched door
     /// whose bolt is slid home is locked, and trying it only yanks it back and forth in that play.
     /// A prop marked <see cref="PhysicsProp.BreaksDoors"/> thrown at it knocks it off its hinges.
     ///
@@ -33,6 +34,10 @@ namespace Sanctify.Interaction
         [SerializeField, Min(0f)] float latchAngle = 10f;
         [Tooltip("Play left when latched, in degrees either side of closed.")]
         [SerializeField, Min(0f)] float latchPlay = 2f;
+        [Tooltip("Seconds a door left open waits before swinging itself shut. Anything with a body touching it, like the player or a prop, restarts the wait, and stops it closing.")]
+        [SerializeField, Min(0f)] float closeDelay = 10f;
+        [Tooltip("Stiffness of the hinge spring that swings it shut. Against the hinge's damper, which sets the pace: stiffer closes faster.")]
+        [SerializeField, Min(0f)] float closeSpring = 3f;
         [Tooltip("Optional. A PhysicsProp jointed to this door that locks it while slid home, past the middle of its travel toward the joint's +x. Its X Drive damper is the friction that keeps it where it's left.")]
         [SerializeField] ConfigurableJoint bolt;
         [Tooltip("How hard a locked door is yanked at the handle when tried, in newtons: toward the player, then away, and so on. It rattles within the latch play.")]
@@ -46,12 +51,16 @@ namespace Sanctify.Interaction
         [Tooltip("A prop marked Breaks Doors that hits the door at least this fast knocks it off its hinges, in m/s. Throws manage it; held props rarely move that fast.")]
         [SerializeField, Min(0f)] float breakSpeed = 2.5f;
 
-        // One entry per touching collider pair, so a prop touching with several colliders stays until the last lets go.
+        // Every body touching it, one entry per collider pair, so one touching with several
+        // colliders stays until the last lets go. Walls and floors aren't kept.
         readonly List<Rigidbody> _touching = new();
 
         Rigidbody _body;
         HingeJoint _hinge;
         JointLimits _openLimits;
+        JointSpring _friction; // the hinge's own spring and damper, as authored
+        float _openFor;
+        bool _closing;
         bool _latched;
         bool _broken;
         Interactable _boltProp;
@@ -69,13 +78,23 @@ namespace Sanctify.Interaction
         {
             get
             {
-                _touching.RemoveAll(body => body == null); // destroyed without a contact exit
+                if (!IsTouched)
+                    return false;
                 foreach (Rigidbody body in _touching)
                 {
-                    if (body.mass >= blockingMass)
+                    if (body.mass >= blockingMass && body.GetComponentInParent<PhysicsProp>() != null)
                         return true;
                 }
                 return false;
+            }
+        }
+
+        bool IsTouched
+        {
+            get
+            {
+                _touching.RemoveAll(body => body == null); // destroyed without a contact exit
+                return _touching.Count > 0;
             }
         }
 
@@ -108,6 +127,8 @@ namespace Sanctify.Interaction
             {
                 _openLimits = _hinge.useLimits ? _hinge.limits : new JointLimits { min = -180f, max = 180f };
                 _hinge.useLimits = true;
+                _friction = _hinge.useSpring ? _hinge.spring : default;
+                _hinge.useSpring = true;
             }
             if (bolt != null)
             {
@@ -136,6 +157,10 @@ namespace Sanctify.Interaction
             if (!_latched && !IsInteractedWith && NearClosed)
                 SetLatched(true);
 
+            // Left open, it swings itself shut after a while, until it latches or something's against it.
+            _openFor = _latched || IsInteractedWith || IsTouched ? 0f : _openFor + Time.fixedDeltaTime;
+            SetClosing(_openFor >= closeDelay);
+
             if (_rattleLeft > 0f)
             {
                 // Yanked like a stuck handle: toward the player, then away, and so on.
@@ -158,11 +183,11 @@ namespace Sanctify.Interaction
         void OnCollisionEnter(Collision collision)
         {
             Rigidbody other = collision.rigidbody;
-            PhysicsProp prop = other != null ? other.GetComponentInParent<PhysicsProp>() : null;
-            if (prop == null)
-                return;
+            if (other == null)
+                return; // walls and floors aren't in the way
+            PhysicsProp prop = other.GetComponentInParent<PhysicsProp>();
             // ponytail: a flag standing in for damage; goes when a Damageable calls Break
-            if (prop.BreaksDoors && collision.relativeVelocity.magnitude >= breakSpeed)
+            if (prop != null && prop.BreaksDoors && collision.relativeVelocity.magnitude >= breakSpeed)
                 Break();
             else
                 _touching.Add(other);
@@ -184,7 +209,7 @@ namespace Sanctify.Interaction
                 return;
             }
             SetLatched(false);
-            Begin(interactor, InteractionStateId.Drag, _body, hitPoint);
+            Begin(interactor, InteractionStateId.Hinge, _body, hitPoint);
         }
 
         /// <summary>
@@ -205,6 +230,25 @@ namespace Sanctify.Interaction
 
         [ContextMenu("Log State")]
         void LogState() => Debug.Log($"{name}: {State}", this);
+
+        /// <summary>
+        /// Turns the hinge's spring toward closed on or off. Angle 0 is closed, since hinge
+        /// angles count from the pose at load.
+        /// </summary>
+        void SetClosing(bool closing)
+        {
+            if (closing == _closing)
+                return;
+            _closing = closing;
+            JointSpring spring = _friction;
+            if (closing)
+            {
+                spring.spring = closeSpring;
+                spring.targetPosition = 0f;
+            }
+            _hinge.spring = spring; // a struct: must be reassigned
+            _body.WakeUp();
+        }
 
         void SetLatched(bool latched)
         {

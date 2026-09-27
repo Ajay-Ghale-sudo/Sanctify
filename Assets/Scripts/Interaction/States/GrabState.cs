@@ -379,7 +379,7 @@ namespace Sanctify.Interaction
             return torque;
         }
 
-        static Vector3 InertiaTimes(Rigidbody body, Vector3 vector)
+        internal static Vector3 InertiaTimes(Rigidbody body, Vector3 vector)
         {
             Quaternion principal = body.rotation * body.inertiaTensorRotation;
             Vector3 local = Quaternion.Inverse(principal) * vector;

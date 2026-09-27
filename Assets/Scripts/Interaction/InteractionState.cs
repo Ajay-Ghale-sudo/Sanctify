@@ -9,9 +9,11 @@ namespace Sanctify.Interaction
         Pickup,
         Grab,
         Drag,
+        Hinge,
+        Crank,
     }
 
-    /// <summary>Buttons routed through the interaction state. Look and movement have their own hooks.</summary>
+    /// <summary>Buttons routed through the interaction state. Look, movement and the right stick have their own hooks.</summary>
     public enum InteractionAction
     {
         Interact,
@@ -52,6 +54,8 @@ namespace Sanctify.Interaction
         public virtual bool OnLook(Vector2 look) => true;
         /// <param name="move">x = strafe, y = forward, -1..1.</param>
         public virtual bool OnMove(Vector2 move) => true;
+        /// <param name="peek">The right stick, -1..1: peek, or the cursor in interact mode.</param>
+        public virtual bool OnPeek(Vector2 peek) => true;
         public virtual void OnPropDestroyed(Interactable prop) { }
 
         protected void ReturnToPrevious() => Interactor.ChangeState(Previous);

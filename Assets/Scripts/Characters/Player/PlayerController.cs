@@ -8,13 +8,15 @@ namespace Sanctify.Characters.Player
     /// Orchestrates the player. Sub-systems have no Update of their own, so this is the
     /// only place ordering is decided:
     ///
-    ///   Update       read input → interact mode → look → actions → interaction tick   (frame rate)
-    ///   FixedUpdate  stance → movement + motor → interaction forces                    (fixed step, deterministic)
+    ///   Update       read input → right stick → interact mode → look → actions → interaction tick   (frame rate)
+    ///   FixedUpdate  stance → movement + motor → interaction forces                                   (fixed step, deterministic)
     ///   LateUpdate   camera rig composes the interpolated pose → interaction, drawn cursor and held-object shadow follow it
     ///
-    /// The cursor interact mode reshapes look and move input first (see <see cref="PlayerInteractMode"/>),
-    /// then look, move and action input pass through the current interaction state, which
-    /// decides whether the default action also runs (see <see cref="PlayerInteractor"/>).
+    /// The current interaction state gets the right stick first, and can keep it from peeking or
+    /// moving the cursor. The cursor interact mode then reshapes look and move input (see
+    /// <see cref="PlayerInteractMode"/>), and look, move and action input pass through the
+    /// current interaction state, which decides whether the default action also runs (see
+    /// <see cref="PlayerInteractor"/>).
     /// </summary>
     [RequireComponent(typeof(PlayerInputReader))]
     [RequireComponent(typeof(PlayerControlLock))]
@@ -87,10 +89,14 @@ namespace Sanctify.Characters.Player
             bool canLook = inputReady && _controls.IsAllowed(PlayerControls.Look);
             bool canAct = inputReady && _controls.IsAllowed(PlayerControls.Actions);
 
-            _interactMode.Tick(dt, canLook, canAct);
+            // The right stick goes to the interaction state first, which may take it (to swing a door, say).
+            Vector2 peekInput = canLook ? _input.Peek : Vector2.zero;
+            if (!_interactor.RoutePeek(peekInput))
+                peekInput = Vector2.zero;
+
+            _interactMode.Tick(dt, peekInput, canAct);
 
             Vector2 lookInput = canLook ? _input.Look : Vector2.zero;
-            Vector2 peekInput = canLook ? _input.Peek : Vector2.zero;
             if (_interactMode.IsActive)
             {
                 lookInput = _interactMode.ShapeLook(lookInput);
