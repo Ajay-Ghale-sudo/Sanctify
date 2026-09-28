@@ -30,6 +30,8 @@ namespace Sanctify.Interaction
         }
         /// <summary>True while an interaction state (pickup, grab, ...) is working on this prop.</summary>
         public bool IsInteractedWith => _user != null;
+        /// <summary>Whoever is working on this prop, or null.</summary>
+        protected PlayerInteractor User => _user;
 
         public bool CanFocus(PlayerInteractor interactor, in RaycastHit hit)
             => !interactionDisabled && !IsInteractedWith && hit.distance <= maxFocusDistance && IsUsableBy(interactor, hit);

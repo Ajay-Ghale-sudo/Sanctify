@@ -46,16 +46,7 @@ namespace Sanctify.Interaction
         /// Degrees from the middle, positive toward on. Worked out from the body's rotation, in
         /// the same terms as its angular velocity and torque, rather than from the hinge's own angle.
         /// </summary>
-        float Angle
-        {
-            get
-            {
-                (_body.rotation * Quaternion.Inverse(_rest)).ToAngleAxis(out float degrees, out Vector3 axis);
-                if (degrees > 180f)
-                    degrees -= 360f;
-                return Vector3.Dot(axis, Axis) < 0f ? -degrees : degrees;
-            }
-        }
+        float Angle => HingeState.SwingAngle(_body, _rest, Axis);
 
         void Awake()
         {

@@ -7,10 +7,13 @@ namespace Sanctify.Interaction
     /// <summary>
     /// A hinged door, swung by its handle with the right stick through the <see cref="HingeState"/>,
     /// in either mode. Props stop it by just being in the way: the door and the props are all
-    /// ordinary dynamic bodies. A door left near closed latches: its hinge limits narrow to a
-    /// little play, so it stays shut when hit until someone works the handle. One left open swings
-    /// itself shut after Close Delay, unless something is against it. A latched door
-    /// whose bolt is slid home is locked, and trying it only yanks it back and forth in that play.
+    /// ordinary dynamic bodies. Let be within Close Zone of closed (nobody holding it, or the
+    /// holder's stick at rest), it shuts itself like a door closer: slowing as it nears the latch,
+    /// then a last push over it. One left open further does the same after Close Delay. Neither
+    /// happens while something is against it. Once shut, it latches: its hinge limits narrow to
+    /// a little play, so it stays shut when hit until someone works the handle. Shutting in the
+    /// hand ends the hold. A latched door whose bolt is slid home is locked, and trying it only
+    /// yanks it back and forth in that play.
     /// A prop marked <see cref="PhysicsProp.BreaksDoors"/> thrown at it knocks it off its hinges.
     ///
     /// The bolt is a <see cref="PhysicsProp"/> on a <see cref="ConfigurableJoint"/> to this door,
@@ -30,14 +33,20 @@ namespace Sanctify.Interaction
 
         [Tooltip("The only part that can be taken hold of. One collider through the door serves both sides.")]
         [SerializeField] Collider handle;
-        [Tooltip("A door nobody holds latches shut below this angle, in degrees.")]
+        [Tooltip("A door let be within this of closed, in degrees, shuts itself straight away: nobody holding it, or the holder's stick at rest.")]
+        [SerializeField, Min(0f)] float closeZone = 30f;
+        [Tooltip("Within this of closed, in degrees, a door shutting itself gets its last push over the latch.")]
         [SerializeField, Min(0f)] float latchAngle = 10f;
-        [Tooltip("Play left when latched, in degrees either side of closed.")]
+        [Tooltip("Play left when latched, in degrees either side of closed. A door latches once it's shut to within this.")]
         [SerializeField, Min(0f)] float latchPlay = 2f;
-        [Tooltip("Seconds a door left open waits before swinging itself shut. Anything with a body touching it, like the player or a prop, restarts the wait, and stops it closing.")]
+        [Tooltip("Seconds a door left open further than Close Zone waits before swinging itself shut. Anything with a body touching it, like the player or a prop, restarts the wait, and stops it closing.")]
         [SerializeField, Min(0f)] float closeDelay = 10f;
-        [Tooltip("Stiffness of the hinge spring that swings it shut. Against the hinge's damper, which sets the pace: stiffer closes faster.")]
-        [SerializeField, Min(0f)] float closeSpring = 3f;
+        [Tooltip("How fast a door swings itself shut, in degrees per second. Within Close Zone it slows in step with how near closed it is.")]
+        [SerializeField, Min(0f)] float closeSpeed = 45f;
+        [Tooltip("How fast the last push over the latch swings it, in degrees per second. More than Close Speed has slowed to by then, so it clicks shut.")]
+        [SerializeField, Min(0f)] float latchSpeed = 40f;
+        [Tooltip("Most torque a door uses to shut itself, in N·m. Weak, so a push or anything in the way wins.")]
+        [SerializeField, Min(0f)] float closeTorque = 15f;
         [Tooltip("Optional. A PhysicsProp jointed to this door that locks it while slid home, past the middle of its travel toward the joint's +x. Its X Drive damper is the friction that keeps it where it's left.")]
         [SerializeField] ConfigurableJoint bolt;
         [Tooltip("How hard a locked door is yanked at the handle when tried, in newtons: toward the player, then away, and so on. It rattles within the latch play.")]
@@ -58,7 +67,7 @@ namespace Sanctify.Interaction
         Rigidbody _body;
         HingeJoint _hinge;
         JointLimits _openLimits;
-        JointSpring _friction; // the hinge's own spring and damper, as authored
+        Quaternion _rest; // closed
         float _openFor;
         bool _closing;
         bool _latched;
@@ -104,7 +113,12 @@ namespace Sanctify.Interaction
             : _latched ? Status.Closed
             : Status.Open;
 
-        bool NearClosed => !_broken && Mathf.Abs(_hinge.angle) < latchAngle;
+        /// <summary>Degrees from closed, signed by the hinge axis.</summary>
+        float Angle => HingeState.SwingAngle(_body, _rest, Axis);
+        Vector3 Axis => _hinge.transform.TransformDirection(_hinge.axis).normalized;
+
+        /// <summary>Held, and the holder is working the stick. Held with the stick at rest, a door is let be.</summary>
+        bool IsPushed => IsInteractedWith && !(User.Current is HingeState { StickAtRest: true });
 
         bool BoltHome
         {
@@ -122,20 +136,19 @@ namespace Sanctify.Interaction
         {
             _body = GetComponent<Rigidbody>();
             _hinge = GetComponent<HingeJoint>();
+            _rest = _body.rotation;
             _broken = _hinge == null;
             if (!_broken)
             {
                 _openLimits = _hinge.useLimits ? _hinge.limits : new JointLimits { min = -180f, max = 180f };
                 _hinge.useLimits = true;
-                _friction = _hinge.useSpring ? _hinge.spring : default;
-                _hinge.useSpring = true;
             }
             if (bolt != null)
             {
                 _boltProp = bolt.GetComponent<Interactable>();
                 _boltFriction = bolt.xDrive.positionDamper;
             }
-            SetLatched(NearClosed);
+            SetLatched(!_broken); // authored closed
         }
 
         void FixedUpdate()
@@ -154,12 +167,25 @@ namespace Sanctify.Interaction
                 return;
             }
 
-            if (!_latched && !IsInteractedWith && NearClosed)
+            // Latches only once shut to within the play, so narrowing the limits never yanks it
+            // there. In the hand, only if it shut itself: taking hold of a shut door leaves it be.
+            float angle = Angle;
+            float off = Mathf.Abs(angle);
+            if (!_latched && off <= latchPlay && (!IsInteractedWith || _closing))
+            {
                 SetLatched(true);
+                if (IsInteractedWith)
+                    User.Cancel(); // it clicks shut, and the hand comes off the handle
+            }
 
-            // Left open, it swings itself shut after a while, until it latches or something's against it.
-            _openFor = _latched || IsInteractedWith || IsTouched ? 0f : _openFor + Time.fixedDeltaTime;
-            SetClosing(_openFor >= closeDelay);
+            // Let be near closed, it shuts itself; left open, after a while. Once going, it keeps
+            // on until it latches, unless it's pushed or something's against it.
+            bool touched = IsTouched;
+            _openFor = _latched || IsInteractedWith || touched ? 0f : _openFor + Time.fixedDeltaTime;
+            _closing = !_latched && !IsPushed && !touched
+                && (_closing || _openFor >= closeDelay || off < closeZone && off > latchPlay);
+            if (_closing)
+                DriveShut(angle);
 
             if (_rattleLeft > 0f)
             {
@@ -232,22 +258,20 @@ namespace Sanctify.Interaction
         void LogState() => Debug.Log($"{name}: {State}", this);
 
         /// <summary>
-        /// Turns the hinge's spring toward closed on or off. Angle 0 is closed, since hinge
-        /// angles count from the pose at load.
+        /// Swings it toward closed like a door closer: at Close Speed, slowing in step with how
+        /// near closed it is once within Close Zone, then quickening to Latch Speed for the last
+        /// push over the latch. Catches up with that speed as the hand does, braking too, with
+        /// the torque capped at Close Torque.
         /// </summary>
-        void SetClosing(bool closing)
+        void DriveShut(float angle)
         {
-            if (closing == _closing)
-                return;
-            _closing = closing;
-            JointSpring spring = _friction;
-            if (closing)
-            {
-                spring.spring = closeSpring;
-                spring.targetPosition = 0f;
-            }
-            _hinge.spring = spring; // a struct: must be reassigned
-            _body.WakeUp();
+            float off = Mathf.Abs(angle);
+            float speed = off < latchAngle ? latchSpeed : closeSpeed * Mathf.Min(off / closeZone, 1f);
+            Vector3 axis = Axis;
+            float gap = (-Mathf.Sign(angle) * speed * Mathf.Deg2Rad) - Vector3.Dot(_body.angularVelocity, axis);
+            float inertia = HingeState.InertiaAbout(_body, _hinge.transform.TransformPoint(_hinge.anchor), axis);
+            float torque = inertia * HingeState.CatchUpPerStep / Time.fixedDeltaTime * gap;
+            _body.AddTorque(axis * Mathf.Clamp(torque, -closeTorque, closeTorque));
         }
 
         void SetLatched(bool latched)

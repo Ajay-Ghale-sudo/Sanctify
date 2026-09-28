@@ -16,8 +16,8 @@ namespace Sanctify.Interaction
     ///
     /// The hand only pushes: it never holds the door back, so a shoved door swings on by itself
     /// until its hinge friction, a limit or something in the way stops it. Pushing the other way
-    /// catches it. Walking plays no part, so the player can stand off the door, or walk, while
-    /// holding it.
+    /// catches it. With the stick at rest, a <see cref="Door"/> near closed shuts itself. Walking
+    /// plays no part, so the player can stand off the door, or walk, while holding it.
     ///
     /// The push goes in at the grabbed point and is capped at Door Strength, so a heavy prop
     /// wedged against a door holds it, and heavy doors get going slowly. The state ends itself if
@@ -31,7 +31,7 @@ namespace Sanctify.Interaction
         const float BreakDistanceSlack = 0.5f;
         // Share of the gap to the hand's speed closed in one physics step: near the most that
         // can't overshoot, so a flick lands at once without buzzing.
-        const float CatchUpPerStep = 0.5f;
+        internal const float CatchUpPerStep = 0.5f;
         // Nearer the hinge line than this, a push has too little leverage to mean anything.
         const float MinLever = 0.05f;
 
@@ -54,6 +54,29 @@ namespace Sanctify.Interaction
         Vector3 Pivot => _hinge.transform.TransformPoint(_hinge.anchor);
         Vector3 Axis => _hinge.transform.TransformDirection(_hinge.axis).normalized;
 
+        /// <summary>The right stick is at rest: the hand is on the handle, but not working it.</summary>
+        public bool StickAtRest => _stick == Vector2.zero; // the input is deadzoned, so rest is exact
+
+        /// <summary>A body's moment of inertia about a hinge line, in kg·m².</summary>
+        internal static float InertiaAbout(Rigidbody body, Vector3 pivot, Vector3 axis)
+        {
+            float centreOff = Vector3.ProjectOnPlane(body.worldCenterOfMass - pivot, axis).magnitude;
+            return Vector3.Dot(axis, GrabState.InertiaTimes(body, axis)) + body.mass * centreOff * centreOff;
+        }
+
+        /// <summary>
+        /// Degrees a body has turned about a hinge axis from a rest pose, signed by the axis.
+        /// Worked out from the body's rotation, in the same terms as its angular velocity and
+        /// torque, rather than from the hinge's own angle.
+        /// </summary>
+        internal static float SwingAngle(Rigidbody body, Quaternion rest, Vector3 axis)
+        {
+            (body.rotation * Quaternion.Inverse(rest)).ToAngleAxis(out float degrees, out Vector3 turn);
+            if (degrees > 180f)
+                degrees -= 360f;
+            return Vector3.Dot(turn, axis) < 0f ? -degrees : degrees;
+        }
+
         public override bool CanEnter(in InteractionContext context)
             => IsHoldable(context.Body) && context.Body.TryGetComponent(out HingeJoint _);
 
@@ -69,10 +92,8 @@ namespace Sanctify.Interaction
             // the hinge. The hinge doesn't move, so neither does this.
             Vector3 axis = Axis;
             Vector3 pivot = Pivot;
-            float centreOff = Vector3.ProjectOnPlane(Body.worldCenterOfMass - pivot, axis).magnitude;
-            float inertia = Vector3.Dot(axis, GrabState.InertiaTimes(Body, axis)) + Body.mass * centreOff * centreOff;
             float lever = Mathf.Max(Vector3.ProjectOnPlane(HitPoint - pivot, axis).magnitude, MinLever);
-            _pointMass = inertia / (lever * lever);
+            _pointMass = InertiaAbout(Body, pivot, axis) / (lever * lever);
 
             _breakDistance = FromHinge(pivot) * BreakDistanceScale + BreakDistanceSlack;
             _unseenTime = 0f;

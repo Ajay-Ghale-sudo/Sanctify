@@ -351,9 +351,10 @@ namespace Sanctify.Editor
             hinge.anchor = new Vector3(0f, DoorHeight * 0.5f, 0f);
             hinge.axis = Vector3.up;
             hinge.useLimits = true;
-            hinge.limits = new JointLimits { min = -100f, max = 100f };
-            hinge.useSpring = true; // spring 0, damper only: hinge friction
-            hinge.spring = new JointSpring { damper = 3f };
+            // Bounces off the limit a little, as a real door does off its stop, instead of dying dead.
+            hinge.limits = new JointLimits { min = -100f, max = 100f, bounciness = 0.3f };
+            hinge.useSpring = true; // spring 0, damper only: hinge friction, enough to visibly slow a swing
+            hinge.spring = new JointSpring { damper = 4f };
 
             var door = leaf.AddComponent<Door>();
             SetReference(door, "handle", handle.GetComponent<Collider>());

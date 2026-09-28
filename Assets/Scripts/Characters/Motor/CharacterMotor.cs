@@ -20,6 +20,9 @@ namespace Sanctify.Characters
     ///   3. Vertical collide-and-slide (gravity).
     ///   4. Ground probe, snapping down while grounded so stairs and slopes keep contact.
     ///
+    /// Dynamic bodies it walks or jumps into get a small push (Push Force), since a kinematic
+    /// capsule that's only moved never shoves anything itself. Ground isn't pushed.
+    ///
     /// Contact normals are verified at the contact point: a capsule cast against a ledge lip
     /// reports the rounded sphere normal, so a short ray at the hit point recovers the true
     /// surface normal. Ground must also touch the lower sphere ("at the feet").
@@ -42,6 +45,8 @@ namespace Sanctify.Characters
         [SerializeField, Min(0.005f)] float skinWidth = 0.02f;
         [SerializeField, Range(1, 8)] int maxSlideIterations = 5;
         [SerializeField, Range(0, 8)] int maxDepenetrationIterations = 4;
+        [Tooltip("How hard the capsule leans on dynamic bodies it moves into, in newtons, at the contact; less for glancing blows. Swings unlatched doors and nudges light props; heavy ones hold.")]
+        [SerializeField, Min(0f)] float pushForce = 60f;
 
         [Header("Ground")]
         [Tooltip("Slopes steeper than this are walls: the character slides off and can't walk up them.")]
@@ -328,6 +333,12 @@ namespace Sanctify.Characters
         {
             for (int i = 0; i < result.ContactCount && _contactCount < MaxContacts; i++)
                 _contacts[_contactCount++] = result.Contacts[i];
+            // Only the move that's kept pushes: not a step-up that was tried and dropped.
+            for (int i = 0; i < result.PushCount; i++)
+            {
+                ref Push push = ref result.Pushes[i];
+                push.Body.AddForceAtPosition(push.Force, push.Point);
+            }
             if (result.HitWall)
             {
                 HitWall = true;
@@ -398,6 +409,10 @@ namespace Sanctify.Characters
                     }
                     result.AddContact(plane);
                 }
+
+                // Pushed along the plane slid against, so walking never shoves props into the floor.
+                if (!isGround)
+                    result.AddPush(hit, -plane * (pushForce * Mathf.Max(Vector3.Dot(direction, -plane), 0f)));
 
                 if (result.PlaneCount >= MaxPlanes)
                     break;
@@ -629,6 +644,8 @@ namespace Sanctify.Characters
             public int PlaneCount;
             public readonly Vector3[] Contacts = new Vector3[MaxPlanes + 1];
             public int ContactCount;
+            public readonly Push[] Pushes = new Push[MaxPlanes + 1];
+            public int PushCount;
 
             public void Reset(Vector3 position)
             {
@@ -639,6 +656,14 @@ namespace Sanctify.Characters
                 WallNormal = Vector3.zero;
                 PlaneCount = 0;
                 ContactCount = 0;
+                PushCount = 0;
+            }
+
+            public void AddPush(in RaycastHit hit, Vector3 force)
+            {
+                Rigidbody body = hit.rigidbody;
+                if (body != null && !body.isKinematic && force.sqrMagnitude > 0f && PushCount < Pushes.Length)
+                    Pushes[PushCount++] = new Push { Body = body, Point = hit.point, Force = force };
             }
 
             public void AddPlane(Vector3 normal)
@@ -652,6 +677,13 @@ namespace Sanctify.Characters
                 if (ContactCount < Contacts.Length)
                     Contacts[ContactCount++] = normal;
             }
+        }
+
+        struct Push
+        {
+            public Rigidbody Body;
+            public Vector3 Point;
+            public Vector3 Force;
         }
 
 #if UNITY_EDITOR
