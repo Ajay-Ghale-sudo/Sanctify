@@ -25,6 +25,11 @@ namespace Sanctify.Interaction
     /// the press that grabbed went to the default state, so the next one lets go. Attack throws.
     /// <see cref="AdjustDepth"/>, <see cref="Rotate"/>, <see cref="Release"/> and
     /// <see cref="Throw"/> are the whole control surface.
+    ///
+    /// A pawn that can't walk (the Mage Hand) drags with this too, made not to carry weight: the
+    /// pull is capped at Drag Strength instead, the object's weight stays on the floor, the pull
+    /// never lifts more than <see cref="DragState.MaxLiftShareOfWeight"/> of it, it keeps no held
+    /// angle, and it can't be thrown.
     /// </summary>
     public sealed class GrabState : HeldState
     {
@@ -43,6 +48,7 @@ namespace Sanctify.Interaction
         const float BrakingShare = 0.6f;
 
         readonly PD3 _spinPd = new(0f, 0f);
+        readonly bool _carriesWeight;
 
         PlayerGrabSettings _settings;
         GrabData _data;
@@ -62,7 +68,9 @@ namespace Sanctify.Interaction
         float _savedMass;
         RigidbodyInterpolation _savedInterpolation;
 
-        public GrabState(PlayerInteractor interactor) : base(interactor) { }
+        /// <param name="carriesWeight">False to drag instead: the object stays on the floor.</param>
+        public GrabState(PlayerInteractor interactor, bool carriesWeight = true) : base(interactor)
+            => _carriesWeight = carriesWeight;
 
         public GrabData Data => _data;
         /// <summary>The body being carried, or null once it's let go.</summary>
@@ -71,9 +79,10 @@ namespace Sanctify.Interaction
         public float Depth => _depth;
         /// <summary>How far along the cursor ray the grabbed point actually is, in metres, at the latest physics step.</summary>
         public float PointDepth => _pointDepth;
-        public bool CanThrow => _data != null && _data.CanThrow;
+        public bool CanThrow => _carriesWeight && _data != null && _data.CanThrow;
 
         Vector3 GrabPoint => Body.position + Body.rotation * _localGrabPoint;
+        float PullCap => _carriesWeight ? _settings.maxPullForce : _settings.dragStrength;
 
         /// <summary>
         /// Where the grabbed point is drawn this frame (the interpolated pose, not the physics
@@ -107,7 +116,7 @@ namespace Sanctify.Interaction
             base.Enter();
             _settings = Interactor.GrabSettings;
             _data = Prop is PhysicsProp physicsProp ? physicsProp.Grab : GrabData.Default;
-            _orient = _data.HoldsOrientation;
+            _orient = _carriesWeight && _data.HoldsOrientation; // a held angle means carrying the weight at the centre
             _throwing = false;
             _unseenTime = 0f;
 
@@ -145,7 +154,7 @@ namespace Sanctify.Interaction
             Body.interpolation = RigidbodyInterpolation.Interpolate; // no jitter between physics steps
 
             Interactor.CollisionFilter.Ignore(Body);
-            Interactor.Movement.SpeedMultiplier = _settings.SpeedMultiplierFor(_savedMass);
+            Interactor.Body.SpeedMultiplier = _settings.SpeedMultiplierFor(_savedMass);
 
             float startDistance = Vector3.Distance(aim.origin, GrabPoint);
             _breakDistance = Mathf.Max(startDistance, _data.maxDepth, _depth) * BreakDistanceScale + BreakDistanceSlack;
@@ -255,12 +264,14 @@ namespace Sanctify.Interaction
             // motion rather than the goal's, so the cursor and view lead and the object follows,
             // while walking doesn't leave it behind. The point's effective mass turns that into
             // the force to apply there.
-            Vector3 goal = KeepOutOfPlayer(aim.origin + aim.direction * _depth + view.rotation * _viewOffset, view);
-            Vector3 relativeVelocity = Body.GetPointVelocity(point) - Interactor.Movement.Velocity;
+            // Collision with the pawn is off while holding, so without the keep-out the cursor
+            // could drag the object into the camera.
+            Vector3 goal = Interactor.Body.KeepOut(aim.origin + aim.direction * _depth + view.rotation * _viewOffset, _settings.keepOutMargin);
+            Vector3 relativeVelocity = Body.GetPointVelocity(point) - Interactor.Body.Velocity;
             Matrix4x4 pointMass = EffectiveMassAt(Body, point);
-            float maxPull = _settings.maxPullForce * _data.forceMultiplier;
+            float maxPull = PullCap * _data.forceMultiplier;
             Vector3 pull = pointMass.MultiplyVector(PullAcceleration(goal - point, relativeVelocity, pointMass, maxPull));
-            pull = Vector3.ClampMagnitude(pull, _settings.maxPullForce) * _data.forceMultiplier;
+            pull = Vector3.ClampMagnitude(pull, PullCap) * _data.forceMultiplier;
 
             if (!_orient)
             {
@@ -274,9 +285,13 @@ namespace Sanctify.Interaction
                 Vector3 spin = Body.angularVelocity;
                 Vector3 disturbance = Vector3.Cross(spin, Vector3.Cross(spin, r))
                                     + Vector3.Cross(InverseInertiaTimes(Body, swingTorque), r);
-                if (Body.useGravity)
+                // Dragging leaves the weight on the floor, where friction works against the pull.
+                if (_carriesWeight && Body.useGravity)
                     disturbance += Physics.gravity;
-                Body.AddForceAtPosition(pull - pointMass.MultiplyVector(disturbance), point);
+                Vector3 force = pull - pointMass.MultiplyVector(disturbance);
+                if (!_carriesWeight)
+                    force = CapLift(force);
+                Body.AddForceAtPosition(force, point);
                 Body.AddTorque(swingTorque);
                 return;
             }
@@ -379,6 +394,18 @@ namespace Sanctify.Interaction
             return torque;
         }
 
+        /// <summary>
+        /// Trims the upward part of a drag's force to a share of the object's weight, so however
+        /// high the goal is, the object stays on the floor.
+        /// </summary>
+        Vector3 CapLift(Vector3 force)
+        {
+            Vector3 up = -Physics.gravity.normalized;
+            float lift = Vector3.Dot(force, up);
+            float cap = DragState.MaxLiftShareOfWeight * Body.mass * Physics.gravity.magnitude;
+            return lift > cap ? force - up * (lift - cap) : force;
+        }
+
         internal static Vector3 InertiaTimes(Rigidbody body, Vector3 vector)
         {
             Quaternion principal = body.rotation * body.inertiaTensorRotation;
@@ -397,32 +424,12 @@ namespace Sanctify.Interaction
                 local.z / Mathf.Max(inertia.z, MinInertia));
         }
 
-        /// <summary>
-        /// Pushes the goal sideways out of the player's capsule. Collision with the player is off
-        /// while holding, so without this the cursor could drag the object into the camera.
-        /// </summary>
-        Vector3 KeepOutOfPlayer(Vector3 goal, in Pose view)
-        {
-            Transform player = Interactor.Motor.transform;
-            Vector3 up = player.up;
-            Vector3 sideways = Vector3.ProjectOnPlane(goal - player.position, up);
-            float minDistance = Interactor.Motor.Radius + _settings.keepOutMargin;
-            float distance = sideways.magnitude;
-            if (distance >= minDistance)
-                return goal;
-
-            Vector3 outward = distance > 1e-4f
-                ? sideways / distance
-                : Vector3.ProjectOnPlane(view.rotation * Vector3.forward, up).normalized;
-            return goal + outward * (minDistance - distance);
-        }
-
         public override void Exit()
         {
             if (_holding)
             {
                 _holding = false;
-                Interactor.Movement.SpeedMultiplier = 1f;
+                Interactor.Body.SpeedMultiplier = 1f;
 
                 Rigidbody body = Body;
                 if (body != null)

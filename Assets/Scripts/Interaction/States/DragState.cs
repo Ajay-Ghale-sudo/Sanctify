@@ -51,7 +51,8 @@ namespace Sanctify.Interaction
         const float LiftStiffness = 10000f; // N/m
         const float MaxLiftStiffnessPerKg = 300f;
         const float LiftDampingRatio = 0.3f;
-        const float MaxLiftShareOfWeight = 0.6f;
+        // Also caps how hard a flier dragging with GrabState can pull up, so it never lifts.
+        internal const float MaxLiftShareOfWeight = 0.6f;
 
         readonly List<Collider> _colliders = new();
 
@@ -87,7 +88,7 @@ namespace Sanctify.Interaction
         {
             PlayerGrabSettings settings = interactor.GrabSettings;
             return interactor.ReachTo(point) <= settings.dragReach
-                && Mathf.Abs(TurnedFrom(point, interactor.Motor.transform)) <= settings.dragLetGoAngle * TakeHoldAngleShare;
+                && Mathf.Abs(TurnedFrom(point, interactor.transform)) <= settings.dragLetGoAngle * TakeHoldAngleShare;
         }
 
         public override void Enter()

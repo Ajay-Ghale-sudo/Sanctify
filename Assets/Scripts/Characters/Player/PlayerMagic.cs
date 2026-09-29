@@ -7,7 +7,10 @@ namespace Sanctify.Characters.Player
     /// Magic button API. Distinguishes a tap from a hold: releasing before
     /// <see cref="holdThreshold"/> is a tap; crossing it raises <see cref="HoldStarted"/>
     /// and the eventual release raises <see cref="HoldReleased"/> with the held time.
-    /// The spell system will subscribe to these later.
+    /// Spells subscribe to these (<see cref="Sanctify.Magic.MageHandSpell"/>).
+    ///
+    /// Also holds the one concentration slot: only one concentration spell can be up, and
+    /// every way one ends goes through <see cref="EndConcentration"/>.
     ///
     /// Driven by <see cref="PlayerController"/>; has no Update of its own.
     /// </summary>
@@ -30,6 +33,29 @@ namespace Sanctify.Characters.Player
         /// <summary>Argument is total seconds held.</summary>
         public event Action<float> HoldReleased;
         public event Action Cancelled;
+
+        Action _endConcentration;
+
+        /// <summary>True while a concentration spell is up.</summary>
+        public bool IsConcentrating => _endConcentration != null;
+
+        /// <summary>
+        /// Starts a concentration spell. Only one can be up, so the current one ends first.
+        /// <paramref name="end"/> is how to end the new one.
+        /// </summary>
+        public void BeginConcentration(Action end)
+        {
+            EndConcentration();
+            _endConcentration = end;
+        }
+
+        /// <summary>Ends the concentration spell that's up, if any. Every ending comes through here.</summary>
+        public void EndConcentration()
+        {
+            Action end = _endConcentration;
+            _endConcentration = null; // cleared first, so the spell's own ending can't loop back in
+            end?.Invoke();
+        }
 
         public void Press()
         {

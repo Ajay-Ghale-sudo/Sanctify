@@ -34,7 +34,14 @@ namespace Sanctify.Interaction
         protected PlayerInteractor User => _user;
 
         public bool CanFocus(PlayerInteractor interactor, in RaycastHit hit)
-            => !interactionDisabled && !IsInteractedWith && hit.distance <= maxFocusDistance && IsUsableBy(interactor, hit);
+            => !interactionDisabled && (!IsInteractedWith || CanTakeFrom(_user, interactor))
+            && hit.distance <= maxFocusDistance && IsUsableBy(interactor, hit);
+
+        /// <summary>
+        /// Whether <paramref name="taker"/> may take this prop from <paramref name="holder"/>, who is
+        /// using it. Two interactors working one prop would fight over it, so by default nobody can.
+        /// </summary>
+        protected virtual bool CanTakeFrom(PlayerInteractor holder, PlayerInteractor taker) => false;
 
         /// <summary>
         /// Whether the prop can be used right now, where the focus ray hit it: e.g. only in the
@@ -46,6 +53,12 @@ namespace Sanctify.Interaction
         /// <param name="hitPoint">Where the focus ray hit, in world space.</param>
         public void Interact(PlayerInteractor interactor, Rigidbody body, Vector3 hitPoint)
         {
+            if (IsInteractedWith)
+            {
+                if (!CanTakeFrom(_user, interactor))
+                    return; // focused before someone else took it up
+                _user.Cancel(); // taken from them: they let go first
+            }
             HandleInteract(interactor, body, hitPoint);
             onInteract?.Invoke();
         }

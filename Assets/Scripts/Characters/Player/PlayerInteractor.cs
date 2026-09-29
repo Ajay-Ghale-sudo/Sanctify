@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Sanctify.Cameras;
 using Sanctify.Interaction;
 using UnityEngine;
 
@@ -13,8 +12,10 @@ namespace Sanctify.Characters.Player
     ///
     /// The Route methods return true when the default action (look, walk, attack, magic)
     /// should also run. Driven by <see cref="PlayerController"/>; has no Update of its own.
+    ///
+    /// Everything that depends on the pawn's shape goes through its <see cref="IInteractorBody"/>,
+    /// so the same states work on the walking player and on the Mage Hand.
     /// </summary>
-    [RequireComponent(typeof(PlayerMovement))]
     [DisallowMultipleComponent]
     public sealed class PlayerInteractor : MonoBehaviour
     {
@@ -45,7 +46,6 @@ namespace Sanctify.Characters.Player
         readonly RaycastHit[] _hits = new RaycastHit[8];
         readonly Dictionary<InteractionStateId, InteractionState> _states = new();
         DefaultState _default;
-        PlayerCameraRig _cameraRig;
         Camera _camera;
 
         /// <summary>
@@ -57,9 +57,19 @@ namespace Sanctify.Characters.Player
         /// <summary>True while the cursor interact mode is on. Loose objects can only be grabbed then.</summary>
         public bool CursorMode { get; set; }
 
+        /// <summary>
+        /// False while the other pawn is being controlled: nothing is focused, but whatever is
+        /// held stays held.
+        /// </summary>
+        public bool IsPossessed { get; set; } = true;
+
         public Transform RayOrigin => rayOrigin;
         public float Range => range;
+        /// <summary>The pawn carrying this interactor.</summary>
+        public IInteractorBody Body { get; private set; }
+        /// <summary>Null on a pawn without legs (the Mage Hand).</summary>
         public CharacterMotor Motor { get; private set; }
+        /// <summary>Null on a pawn without legs (the Mage Hand).</summary>
         public PlayerMovement Movement { get; private set; }
         /// <summary>For states that steer the view. Null on a rig without look.</summary>
         public PlayerLook Look { get; private set; }
@@ -70,16 +80,7 @@ namespace Sanctify.Characters.Player
         /// Unmodified view pose at the latest fixed step, for physics that follows the view.
         /// Use <see cref="AimDirection"/> for where the crosshair points.
         /// </summary>
-        public Pose ViewPose
-        {
-            get
-            {
-                if (_cameraRig != null)
-                    return _cameraRig.FixedStepPose;
-                Transform origin = rayOrigin != null ? rayOrigin : transform;
-                return new Pose(origin.position, origin.rotation);
-            }
-        }
+        public Pose ViewPose => Body.ViewPose;
 
         /// <summary>The ray under the cursor, from the rendered camera, so it hits what the player sees.</summary>
         public Ray FocusRay
@@ -132,15 +133,17 @@ namespace Sanctify.Characters.Player
 
         void Awake()
         {
-            if (rayOrigin == null)
-                Debug.LogWarning($"{nameof(PlayerInteractor)} on {name} has no ray origin assigned, so nothing can be focused.", this);
-
+            Body = GetComponent<IInteractorBody>();
+            if (Body == null)
+                Debug.LogError($"{nameof(PlayerInteractor)} on {name} needs a component that implements {nameof(IInteractorBody)}.", this);
             Motor = GetComponent<CharacterMotor>();
             Movement = GetComponent<PlayerMovement>();
             Look = GetComponent<PlayerLook>();
-            _cameraRig = GetComponentInChildren<PlayerCameraRig>();
-            _camera = rayOrigin != null ? rayOrigin.GetComponent<Camera>() : null;
-            CollisionFilter = new PlayerCollisionFilter(Motor);
+            // The hand is given its ray origin after it spawns.
+            if (rayOrigin == null && Motor != null)
+                Debug.LogWarning($"{nameof(PlayerInteractor)} on {name} has no ray origin assigned, so nothing can be focused.", this);
+            SetRayOrigin(rayOrigin);
+            CollisionFilter = new PlayerCollisionFilter(Body);
 
             GrabSettings = grabSettings;
             if (GrabSettings == null)
@@ -151,11 +154,21 @@ namespace Sanctify.Characters.Player
 
             _default = new DefaultState(this);
             _states.Add(InteractionStateId.Default, _default);
-            _states.Add(InteractionStateId.Pickup, new PickupState(this));
             _states.Add(InteractionStateId.Grab, new GrabState(this));
-            _states.Add(InteractionStateId.Drag, new DragState(this));
             _states.Add(InteractionStateId.Hinge, new HingeState(this));
             _states.Add(InteractionStateId.Crank, new CrankState(this));
+            if (Motor != null)
+            {
+                // ponytail: "walks" stands in for "has an inventory" until an Inventory component
+                // exists; then register Pickup when GetComponent<Inventory>() != null.
+                _states.Add(InteractionStateId.Pickup, new PickupState(this));
+                _states.Add(InteractionStateId.Drag, new DragState(this));
+            }
+            else
+            {
+                // A flier drags by pulling weakly at the grabbed point, and never lifts it.
+                _states.Add(InteractionStateId.Drag, new GrabState(this, carriesWeight: false));
+            }
 
             Current = _default;
             Current.Enter();
@@ -163,6 +176,16 @@ namespace Sanctify.Characters.Player
 
         // Whatever is mid-interaction gets restored rather than left frozen.
         void OnDisable() => Cancel();
+
+        /// <summary>Points the focus ray from <paramref name="origin"/>, normally a camera.</summary>
+        public void SetRayOrigin(Transform origin)
+        {
+            rayOrigin = origin;
+            _camera = origin != null ? origin.GetComponent<Camera>() : null;
+        }
+
+        /// <summary>Whether this interactor can do what a state does, e.g. whether it can pick things up.</summary>
+        public bool HasState(InteractionStateId id) => _states.ContainsKey(id);
 
         // ------------------------------------------------------------------
         // Driven by PlayerController
@@ -246,11 +269,11 @@ namespace Sanctify.Characters.Player
 
         internal void NotifyPropDestroyed(Interactable prop) => Current?.OnPropDestroyed(prop);
 
-        /// <summary>Nearest hit along the focus ray, skipping the player and triggers that aren't props.</summary>
+        /// <summary>Nearest hit along the focus ray, skipping both pawns and triggers that aren't props.</summary>
         public bool CastFocusRay(out RaycastHit best)
         {
             best = default;
-            if (rayOrigin == null)
+            if (rayOrigin == null || !IsPossessed)
                 return false;
 
             int count = Physics.RaycastNonAlloc(FocusRay, _hits, range, mask, triggers);
@@ -263,7 +286,7 @@ namespace Sanctify.Characters.Player
                 if (hit.distance >= bestDistance)
                     continue;
                 Collider collider = hit.collider;
-                if (collider.transform.IsChildOf(transform))
+                if (IsPawn(collider))
                     continue;
                 // Triggers only count when they belong to a prop, so volumes like audio zones don't block focus.
                 if (collider.isTrigger && collider.GetComponentInParent<Interactable>() == null)
@@ -278,7 +301,7 @@ namespace Sanctify.Characters.Player
         }
 
         /// <summary>
-        /// Whether nothing solid lies between two points. The player, triggers and
+        /// Whether nothing solid lies between two points. Both pawns, triggers and
         /// <paramref name="ignoredBody"/> (usually whatever is being held) don't block.
         /// </summary>
         public bool HasLineOfSight(Vector3 from, Vector3 to, Rigidbody ignoredBody)
@@ -289,7 +312,7 @@ namespace Sanctify.Characters.Player
         }
 
         /// <summary>
-        /// Nearest solid hit along a ray. The player, triggers and <paramref name="ignoredBody"/>
+        /// Nearest solid hit along a ray. Both pawns, triggers and <paramref name="ignoredBody"/>
         /// (usually whatever is being held) are passed through.
         /// </summary>
         public bool CastSolid(Ray ray, float distance, Rigidbody ignoredBody, out RaycastHit nearest)
@@ -305,7 +328,7 @@ namespace Sanctify.Characters.Player
                 Collider collider = hit.collider;
                 if (ignoredBody != null && collider.attachedRigidbody == ignoredBody)
                     continue;
-                if (collider.transform.IsChildOf(transform))
+                if (IsPawn(collider))
                     continue;
                 nearestDistance = hit.distance;
                 nearest = hit;
@@ -313,15 +336,15 @@ namespace Sanctify.Characters.Player
             return nearestDistance < float.MaxValue;
         }
 
-        /// <summary>
-        /// How far past the side of the player's body a point is, measured flat: how far the arms
-        /// have to reach for it, bending as needed. Negative inside the capsule.
-        /// </summary>
-        public float ReachTo(Vector3 point)
+        /// <summary>Whether a collider is the player's or the Mage Hand's. Neither blocks the other's focus or sight lines.</summary>
+        internal static bool IsPawn(Collider collider)
         {
-            Transform body = Motor.transform;
-            return Vector3.ProjectOnPlane(point - body.position, body.up).magnitude - Motor.Radius;
+            Rigidbody body = collider.attachedRigidbody;
+            return body != null && body.TryGetComponent(out PlayerInteractor _);
         }
+
+        /// <summary>How far past the pawn's surface a point is: the reach needed to touch it. Negative inside it.</summary>
+        public float ReachTo(Vector3 point) => Body.ReachTo(point);
 
         /// <summary>Where a world point shows in the rendered view, 0..1 with y up. False if it's behind the camera.</summary>
         public bool TryGetViewportPoint(Vector3 world, out Vector2 viewport)

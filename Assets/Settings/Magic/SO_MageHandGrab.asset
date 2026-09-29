@@ -1,0 +1,50 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 51d0693cd091f6c4aa1fe35c901723d6, type: 3}
+  m_Name: SO_MageHandGrab
+  m_EditorClassIdentifier: Sanctify::Sanctify.Interaction.PlayerGrabSettings
+  stiffness: 225
+  damping: 30
+  maxPullForce: 30
+  swingDamping: 6
+  orientationResponse: 8
+  maxSpin: 6
+  spinCatchUp: 30
+  maxAngularAcceleration: 200
+  grabReach: 0.55
+  grabPull: 0.08
+  holdDistance: 0.6
+  drawInSpeed: 1.5
+  keepOutMargin: 0.1
+  lineOfSightGrace: 0.5
+  throwStrength: 3
+  maxThrowSpeed: 6
+  throwLoft: 8
+  maxReleaseSpeed: 2
+  maxReleaseAngularSpeed: 4
+  slowdownStartMass: 0.5
+  slowdownFullMass: 8
+  slowestSpeedMultiplier: 0.35
+  maxLiftMass: 4.5
+  dragReach: 0.55
+  dragStrength: 250
+  dragLeanTime: 0.4
+  dragSpeed: 0.9
+  heavyDragSpeed: 0.3
+  heavyDragMass: 100
+  dragLiftHeight: 0.05
+  maxDragLift: 250
+  dragLetGoAngle: 60
+  dragSlowestTurn: 0.25
+  doorFlickSpeed: 4
+  doorFlickTime: 0.15
+  doorStrength: 80

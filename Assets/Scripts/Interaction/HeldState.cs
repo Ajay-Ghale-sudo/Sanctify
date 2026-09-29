@@ -55,14 +55,14 @@ namespace Sanctify.Interaction
             return false;
         }
 
-        /// <summary>Whether the physics states can take hold of a body: it moves, and isn't what the player stands on.</summary>
+        /// <summary>Whether the physics states can take hold of a body: it moves, and isn't what the pawn stands on.</summary>
         protected bool IsHoldable(Rigidbody body)
         {
             if (body == null || body.isKinematic)
                 return false;
 
             // Holding what you stand on would drop you through it.
-            Collider ground = Interactor.Motor.GroundCollider;
+            Collider ground = Interactor.Body.Ground;
             return ground == null || ground.attachedRigidbody != body;
         }
     }

@@ -24,23 +24,25 @@ namespace Sanctify.Characters.Player
     ///   - while a door or lever is held, the right stick swings it instead, and while a crank is
     ///     held, circling the stick turns it; the drawn cursor rides the point grabbed (see
     ///     <see cref="HingeState"/>, <see cref="CrankState"/>)
-    ///   - the triggers raise the player onto their toes or crouch them, instead of pitching
+    ///   - the triggers raise the player onto their toes or crouch them, instead of pitching. A
+    ///     pawn without a stance (the Mage Hand) pitches only with the edge turn, like the player
     ///
     /// It sits above the interaction states rather than being one, so the cursor keeps working
     /// while an object is held. Turning it off drops whatever is held, stands the player back up
     /// and eases the drawn cursor back to the centre. The focus ray snaps back at once, so it
     /// doesn't pick things up on the way.
     ///
-    /// Driven by <see cref="PlayerController"/>: input in Update, the drawn cursor in
-    /// LateUpdate after the camera. Has no Update of its own.
+    /// Each pawn has its own, so the player's cursor stays where it was while the Mage Hand is
+    /// controlled, and the other way round. Driven by <see cref="PlayerController"/>, for the
+    /// pawn being controlled only: input in Update, the drawn cursor in LateUpdate after the
+    /// camera. Has no Update of its own.
     /// </summary>
     [RequireComponent(typeof(PlayerInteractor))]
-    [RequireComponent(typeof(PlayerStance))]
     [DisallowMultipleComponent]
     public sealed class PlayerInteractMode : MonoBehaviour
     {
         static readonly Vector2 Centre = new(0.5f, 0.5f);
-        // Squared degrees per second above which the view counts as turning, for the leash.
+        // Degrees per second above which the view counts as turning, for the leash.
         const float TurningThreshold = 1f;
 
         [Header("Cursor")]
@@ -69,8 +71,7 @@ namespace Sanctify.Characters.Player
 
         PlayerInputReader _input;
         PlayerInteractor _interactor;
-        PlayerStance _stance;
-        PlayerLook _look; // optional: without it, the leash never counts the view as turning
+        PlayerStance _stance; // optional: without it, the triggers do nothing here
 
         Vector2 _cursor = Centre;
         Vector2 _edgeLook;
@@ -94,8 +95,10 @@ namespace Sanctify.Characters.Player
             _input = GetComponent<PlayerInputReader>();
             _interactor = GetComponent<PlayerInteractor>();
             _stance = GetComponent<PlayerStance>();
-            _look = GetComponent<PlayerLook>();
         }
+
+        /// <summary>For a pawn without an input reader of its own (the Mage Hand), which reads the player's.</summary>
+        public void SetInput(PlayerInputReader input) => _input = input;
 
         void OnDisable()
         {
@@ -127,9 +130,10 @@ namespace Sanctify.Characters.Player
                 _cursor = LeashToHeldObject(before);
             _edgeLook = EdgeLook(_onHeldObject ? DisplayCursor : _cursor, stick);
 
-            _stance.Requested = _input.TiptoeHeld ? Stance.Tiptoe
-                              : _input.CrouchHeld ? Stance.Crouching
-                              : Stance.Standing;
+            if (_stance != null)
+                _stance.Requested = _input.TiptoeHeld ? Stance.Tiptoe
+                                  : _input.CrouchHeld ? Stance.Crouching
+                                  : Stance.Standing;
 
             if (_interactor.Current is GrabState grab)
                 grab.AdjustDepth(LeashDepthChange(grab, _input.Move.x * depthSpeed * deltaTime));
@@ -194,7 +198,8 @@ namespace Sanctify.Characters.Player
             IsActive = false;
             _edgeLook = Vector2.zero;
             _edgeTurnX = _edgeTurnY = 0;
-            _stance.Requested = Stance.Standing;
+            if (_stance != null)
+                _stance.Requested = Stance.Standing;
             _interactor.Cancel();
             _interactor.CursorViewport = Centre;
             _interactor.CursorMode = false;
@@ -223,7 +228,7 @@ namespace Sanctify.Characters.Player
         Vector2 LeashToHeldObject(Vector2 before)
         {
             float lead = maxLead;
-            bool viewTurning = _look != null && _look.AngularVelocity.sqrMagnitude > TurningThreshold;
+            bool viewTurning = _interactor.Body.TurnSpeed > TurningThreshold;
             if (!viewTurning)
                 lead = Mathf.Max(lead, (before - DisplayCursor).magnitude);
             return ClampToLimit(DisplayCursor + Vector2.ClampMagnitude(_cursor - DisplayCursor, lead));

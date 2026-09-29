@@ -33,6 +33,9 @@ namespace Sanctify.Cameras
         public float TargetAspect => aspectWidth / aspectHeight;
         public RenderTexture Texture => _texture;
 
+        /// <summary>0 = clear, 1 = black. Tints the view image, so fades need no canvas of their own.</summary>
+        public float Fade { set { if (_view != null) _view.color = Color.Lerp(Color.white, Color.black, value); } }
+
         /// <summary>Where the fixed-aspect view sits on screen, in pixels with y up (screen space).</summary>
         public Rect ViewScreenRect
         {

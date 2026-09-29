@@ -3,6 +3,7 @@ using Sanctify.Characters;
 using Sanctify.Characters.Player;
 using Sanctify.Debugging;
 using Sanctify.Interaction;
+using Sanctify.Magic;
 using UnityEditor;
 using UnityEditor.Events;
 using UnityEditor.SceneManagement;
@@ -14,17 +15,21 @@ namespace Sanctify.Editor
     /// <summary>
     /// One-click setup so the player rig is built the same way every time:
     ///
-    ///   Player           (CapsuleCollider, Rigidbody, CharacterMotor, PlayerController + subsystems)
-    ///   └─ PlayerCamera  (Camera, PlayerCameraRig, FixedAspectRenderer, HeadBobModifier,
-    ///                     PeekModifier, LandingDipModifier, AudioListener, DebugCrosshair)
+    ///   Player           (CapsuleCollider, Rigidbody, CharacterMotor, PlayerController + subsystems, MageHandSpell)
+    ///   ├─ PlayerCamera  (Camera, PlayerCameraRig, FixedAspectRenderer, HeadBobModifier,
+    ///   │                 PeekModifier, LandingDipModifier, AudioListener, DebugCrosshair)
+    ///   └─ Body          (capsule mesh, hidden unless the Mage Hand is possessed)
     ///
     /// The camera has no pivot chain: PlayerCameraRig composes its world pose every frame.
-    /// Settings assets are created under Assets/Settings/Player if they don't exist yet.
+    /// Settings assets are created under Assets/Settings/Player (and Magic) if they don't exist
+    /// yet, and the Mage Hand prefab under Assets/Prefabs.
     /// </summary>
     public static class PlayerRigBuilder
     {
         const string SettingsFolder = "Assets/Settings/Player";
         const string InteractionSettingsFolder = "Assets/Settings/Interaction";
+        const string MagicSettingsFolder = "Assets/Settings/Magic";
+        const string MageHandPrefabPath = "Assets/Prefabs/MageHand.prefab";
         const string InteractionArtFolder = "Assets/Art/Interaction";
         // URP's decal graph with angle fade turned on, so the shadow stays off walls.
         const string HeldShadowShaderPath = InteractionArtFolder + "/SG_HeldShadowDecal.shadergraph";
@@ -105,6 +110,7 @@ namespace Sanctify.Editor
 
             var controller = root.AddComponent<PlayerController>();
             SetReference(controller, "cameraRig", rig);
+            AddMageHandSpell(root);
 
             // ---- Housekeeping ----
             WarnAboutOtherMainCameras(camera);
@@ -159,6 +165,7 @@ namespace Sanctify.Editor
             CreateDragTests(parent);
             CreateDoorTests(parent);
             CreateMechanismTests(parent);
+            CreateMageHandTests(parent);
             UpgradePlayerRigs();
 
             Selection.activeGameObject = arena;
@@ -429,6 +436,22 @@ namespace Sanctify.Editor
         }
 
         /// <summary>
+        /// A static L-shaped wall south-west of the spawn, 3 m tall with 6 m arms, opening toward
+        /// the spawn. Flying the Mage Hand round either arm's end bends its tether at the corner,
+        /// so it breaks sooner than the same straight-line distance in the open.
+        /// </summary>
+        static void CreateMageHandTests(Transform arena)
+        {
+            var group = new GameObject("MageHandTests");
+            group.transform.SetParent(arena, false);
+            Transform parent = group.transform;
+
+            // Corner at (-16, -16); one arm runs north to z = -10, the other east to x = -10.
+            Block(parent, "Tether Wall W", new Vector3(-16f, 1.5f, -13f), new Vector3(0.3f, 3f, 6f));
+            Block(parent, "Tether Wall S", new Vector3(-13f, 1.5f, -16f), new Vector3(6f, 3f, 0.3f));
+        }
+
+        /// <summary>
         /// Two tall posts and a beam, with a gate between them that rises its own height. There's
         /// no wall either side: it only has to be seen to open.
         /// </summary>
@@ -548,9 +571,115 @@ namespace Sanctify.Editor
                     SetReferenceIfEmpty(interactor, "grabSettings", grabSettings);
                 if (heldShadowMaterial != null)
                     SetReferenceIfEmpty(root.GetComponent<HeldObjectShadow>(), "material", heldShadowMaterial);
+                AddMageHandSpell(root);
 
                 EditorSceneManager.MarkSceneDirty(root.scene);
             }
+        }
+
+        /// <summary>
+        /// Adds the Mage Hand spell and the body it shows while the hand is possessed, and fills in
+        /// whatever it's missing. Safe to run repeatedly.
+        /// </summary>
+        static void AddMageHandSpell(GameObject player)
+        {
+            AddIfMissing<MageHandSpell>(player);
+            var spell = player.GetComponent<MageHandSpell>();
+            SetReferenceIfEmpty(spell, "handPrefab", GetOrCreateMageHandPrefab());
+            SetReferenceIfEmpty(spell, "settings", GetOrCreateAsset<MageHandSettings>("SO_MageHand", MagicSettingsFolder));
+            SetReferenceIfEmpty(spell, "playerBody", GetOrCreateBodyPlaceholder(player));
+        }
+
+        /// <summary>
+        /// A capsule mesh matching the player's collider, with no collider of its own, hidden until
+        /// the Mage Hand is possessed. Without it the hand would have nothing to fly back to.
+        /// </summary>
+        static Renderer GetOrCreateBodyPlaceholder(GameObject player)
+        {
+            Transform existing = player.transform.Find("Body");
+            if (existing != null)
+                return existing.GetComponent<Renderer>();
+
+            var capsule = player.GetComponent<CapsuleCollider>();
+            var body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            Undo.RegisterCreatedObjectUndo(body, "Add Body Placeholder");
+            body.name = "Body";
+            Object.DestroyImmediate(body.GetComponent<Collider>());
+            body.transform.SetParent(player.transform, false);
+            // The primitive is 2 m tall with a 0.5 m radius.
+            body.transform.localPosition = capsule.center;
+            body.transform.localScale = new Vector3(capsule.radius * 2f, capsule.height * 0.5f, capsule.radius * 2f);
+            var renderer = body.GetComponent<Renderer>();
+            renderer.enabled = false; // MageHandSpell shows it
+            return renderer;
+        }
+
+        /// <summary>
+        /// The Mage Hand: a gravity-free 0.15 m sphere with its own interactor on the weaker
+        /// <c>SO_MageHandGrab</c> and its own interact mode, the camera anchor at its centre, and a
+        /// placeholder mesh low in front of it. Made once; later edits to the prefab are kept.
+        /// </summary>
+        static MageHand GetOrCreateMageHandPrefab()
+        {
+            var existing = AssetDatabase.LoadAssetAtPath<MageHand>(MageHandPrefabPath);
+            if (existing != null)
+                return existing;
+
+            // D&D's Mage Hand can't carry more than 10 lb, so the lift limit is 4.5 kg; the rest
+            // is scaled to match, so the hand feels weaker than the player in every way.
+            var grabSettings = GetOrCreateAsset<PlayerGrabSettings>("SO_MageHandGrab", MagicSettingsFolder, s =>
+            {
+                s.maxLiftMass = 4.5f;
+                s.maxPullForce = 30f;
+                s.dragStrength = 250f;
+                s.throwStrength = 3f;
+                s.maxThrowSpeed = 6f;
+                s.doorStrength = 80f;
+                s.grabReach = 0.55f; // from the sphere, so grabs land near GrabData.minDepth and nothing is shoved on grab
+                s.dragReach = 0.55f;
+                s.holdDistance = 0.6f;
+                s.slowdownStartMass = 0.5f;
+                s.slowdownFullMass = 8f;
+                s.slowestSpeedMultiplier = 0.35f;
+                s.keepOutMargin = 0.1f;
+            });
+
+            var root = new GameObject("MageHand");
+            root.AddComponent<SphereCollider>().radius = 0.15f;
+
+            var body = root.AddComponent<Rigidbody>();
+            body.mass = 1f;
+            body.useGravity = false;
+            body.linearDamping = 0f;
+            body.angularDamping = 0f;
+            body.interpolation = RigidbodyInterpolation.Interpolate; // the camera rides it
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+
+            // The camera's 0.05 m near clip is well inside the sphere, so walls never clip into view.
+            var eye = new GameObject("Eye");
+            eye.transform.SetParent(root.transform, false);
+
+            var visual = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            visual.name = "Visual";
+            Object.DestroyImmediate(visual.GetComponent<Collider>());
+            visual.transform.SetParent(root.transform, false);
+            visual.transform.localPosition = new Vector3(0f, -0.06f, 0.12f); // low in the view
+            visual.transform.localScale = new Vector3(0.08f, 0.025f, 0.1f);
+
+            var hand = root.AddComponent<MageHand>();
+            SetReference(hand, "eye", eye.transform);
+            SetReference(hand, "visual", visual.transform);
+
+            // Its ray origin is the player's camera, given when it spawns.
+            var interactor = root.GetComponent<PlayerInteractor>();
+            SetReference(interactor, "grabSettings", grabSettings);
+            SetFloat(interactor, "range", 1.5f);
+
+            EnsureFolder(System.IO.Path.GetDirectoryName(MageHandPrefabPath)?.Replace('\\', '/'));
+            var prefab = PrefabUtility.SaveAsPrefabAsset(root, MageHandPrefabPath);
+            Object.DestroyImmediate(root);
+            Debug.Log($"Mage Hand prefab created at {MageHandPrefabPath}.", prefab);
+            return prefab.GetComponent<MageHand>();
         }
 
         static void AddIfMissing<T>(GameObject go) where T : Component

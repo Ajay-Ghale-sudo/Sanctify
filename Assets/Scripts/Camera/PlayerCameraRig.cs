@@ -15,6 +15,7 @@ namespace Sanctify.Cameras
     /// The body moves on the fixed timestep; this reads <see cref="CharacterMotor"/>'s
     /// previous/current positions and interpolates, so the camera is smooth at any frame rate.
     /// Modifiers are found on this GameObject at startup and run in <see cref="ICameraModifier.Order"/>.
+    /// While <see cref="ViewOverride"/> is set, the camera looks out of that transform instead.
     ///
     /// Driven by <see cref="PlayerController"/> from LateUpdate.
     /// </summary>
@@ -43,6 +44,12 @@ namespace Sanctify.Cameras
         /// <summary>Pose before modifiers, for systems that want a stable reference (e.g. aiming).</summary>
         public Vector3 BasePosition { get; private set; }
         public Quaternion BaseRotation { get; private set; }
+
+        /// <summary>
+        /// Another pawn's eye to look out of, such as the Mage Hand's. Null for the player's own.
+        /// It should already move smoothly (an interpolated Rigidbody does).
+        /// </summary>
+        public Transform ViewOverride { get; set; }
 
         /// <summary>
         /// View pose at the latest fixed step: body position + eye height with the look rotation,
@@ -94,17 +101,26 @@ namespace Sanctify.Cameras
             if (_motor == null || _look == null)
                 return;
 
-            Vector3 up = _motor.transform.up;
-            float alpha = FixedAlpha;
-            Vector3 body = _motor.GetInterpolatedPosition(alpha);
-            float eye = eyeHeight + (_stance != null ? _stance.GetInterpolatedEyeOffset(alpha) : 0f);
-
-            BaseRotation = LookRotation;
-            BasePosition = body + up * eye;
-
             CameraPose pose = default;
-            for (int i = 0; i < _modifiers.Count; i++)
-                _modifiers[i].Modify(ref pose, deltaTime);
+            if (ViewOverride != null)
+            {
+                // Bob, peek and the landing dip belong to the player's body, so they're left out.
+                BasePosition = ViewOverride.position;
+                BaseRotation = ViewOverride.rotation;
+            }
+            else
+            {
+                Vector3 up = _motor.transform.up;
+                float alpha = FixedAlpha;
+                Vector3 body = _motor.GetInterpolatedPosition(alpha);
+                float eye = eyeHeight + (_stance != null ? _stance.GetInterpolatedEyeOffset(alpha) : 0f);
+
+                BaseRotation = LookRotation;
+                BasePosition = body + up * eye;
+
+                for (int i = 0; i < _modifiers.Count; i++)
+                    _modifiers[i].Modify(ref pose, deltaTime);
+            }
 
             Vector3 position = BasePosition + BaseRotation * pose.PositionOffset;
             Quaternion rotation = BaseRotation * Quaternion.Euler(pose.EulerOffset);

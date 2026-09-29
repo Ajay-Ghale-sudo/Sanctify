@@ -1,5 +1,6 @@
 using Sanctify.Cameras;
 using Sanctify.Characters.Player;
+using Sanctify.Magic;
 using UnityEngine;
 
 namespace Sanctify.Debugging
@@ -7,7 +8,7 @@ namespace Sanctify.Debugging
     /// <summary>
     /// Draws a small dot where the focus ray goes: the centre of the 4:3 view, or the cursor
     /// while the interact mode is on. While a prop is focused, the dot changes colour and the
-    /// prop's focus text shows below it.
+    /// prop's focus text shows below it. Follows whichever pawn is being controlled.
     /// </summary>
     public sealed class DebugCrosshair : MonoBehaviour
     {
@@ -19,6 +20,7 @@ namespace Sanctify.Debugging
 
         PlayerInteractor _interactor;
         PlayerInteractMode _interactMode;
+        MageHandSpell _mageHand;
         FixedAspectRenderer _aspect;
         GUIStyle _labelStyle;
 
@@ -26,21 +28,26 @@ namespace Sanctify.Debugging
         {
             _interactor = GetComponentInParent<PlayerInteractor>();
             _interactMode = GetComponentInParent<PlayerInteractMode>();
+            _mageHand = GetComponentInParent<MageHandSpell>();
             _aspect = GetComponent<FixedAspectRenderer>();
         }
 
         void OnGUI()
         {
-            Vector2 viewport = _interactMode != null ? _interactMode.DisplayCursor : new Vector2(0.5f, 0.5f);
+            bool handPossessed = _mageHand != null && _mageHand.HandPossessed;
+            PlayerInteractMode interactMode = handPossessed ? _mageHand.Hand.InteractMode : _interactMode;
+            PlayerInteractor interactor = handPossessed ? _mageHand.Hand.Interactor : _interactor;
+
+            Vector2 viewport = interactMode != null ? interactMode.DisplayCursor : new Vector2(0.5f, 0.5f);
             Vector2 at = _aspect != null
                 ? _aspect.ViewportToGuiPoint(viewport)
                 : new Vector2(Screen.width * viewport.x, Screen.height * (1f - viewport.y));
             float x = at.x;
             float y = at.y;
-            float dot = _interactMode != null && _interactMode.IsActive ? cursorSize : size;
+            float dot = interactMode != null && interactMode.IsActive ? cursorSize : size;
 
             Color previous = GUI.color;
-            var focus = _interactor != null ? _interactor.FocusProp : null;
+            var focus = interactor != null ? interactor.FocusProp : null;
 
             if (outline)
             {

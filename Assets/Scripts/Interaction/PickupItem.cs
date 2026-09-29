@@ -7,6 +7,11 @@ namespace Sanctify.Interaction
     /// <summary>
     /// An item the player picks up into the inventory. Interacting starts the short
     /// <see cref="PickupState"/>, which calls <see cref="Take"/> on the grab frame.
+    ///
+    /// A pawn that can't pick things up (the Mage Hand) grabs it like any loose object instead:
+    /// only in interact mode and within reach, and dragged if it's too heavy for that pawn to
+    /// lift. A pawn that can pick things up can pick it up out of that one's grip, so the hand
+    /// fetches items and the player takes them from it.
     /// </summary>
     public sealed class PickupItem : Interactable
     {
@@ -33,10 +38,37 @@ namespace Sanctify.Interaction
 
         void Awake() => _body = GetComponent<Rigidbody>();
 
+        // Picked up anywhere the focus ray reaches; grabbed as a loose object is (see PhysicsProp).
+        protected override bool IsUsableBy(PlayerInteractor interactor, in RaycastHit hit)
+        {
+            if (interactor.HasState(InteractionStateId.Pickup))
+                return true;
+            if (!interactor.CursorMode)
+                return false;
+            return Drags(interactor) ? DragState.CanTakeHold(interactor, hit.point) : GrabState.InReach(interactor, hit.point);
+        }
+
         // Use the item's own body, not the one the ray reports: an item without a body that sits
         // under another rigidbody would otherwise freeze that parent.
         protected override void HandleInteract(PlayerInteractor interactor, Rigidbody body, Vector3 hitPoint)
-            => Begin(interactor, InteractionStateId.Pickup, _body, hitPoint);
+        {
+            if (interactor.HasState(InteractionStateId.Pickup))
+            {
+                Begin(interactor, InteractionStateId.Pickup, _body, hitPoint);
+                return;
+            }
+            // ponytail: an item placed without a body gets a stock 1 kg one to be carried, and
+            // stays loose after; give the item its own Rigidbody where the mass matters
+            if (_body == null)
+                _body = gameObject.AddComponent<Rigidbody>();
+            Begin(interactor, Drags(interactor) ? InteractionStateId.Drag : InteractionStateId.Grab, _body, hitPoint);
+        }
+
+        // Taken out of the grip of a pawn that can only carry it.
+        protected override bool CanTakeFrom(PlayerInteractor holder, PlayerInteractor taker)
+            => taker.HasState(InteractionStateId.Pickup) && !holder.HasState(InteractionStateId.Pickup);
+
+        bool Drags(PlayerInteractor interactor) => _body != null && interactor.GrabSettings.IsTooHeavyToLift(_body.mass);
 
         /// <summary>
         /// Adds the item to the inventory (Amnesia's item interact handler, moved to the grab frame).

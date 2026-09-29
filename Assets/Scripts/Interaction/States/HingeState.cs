@@ -95,7 +95,7 @@ namespace Sanctify.Interaction
             float lever = Mathf.Max(Vector3.ProjectOnPlane(HitPoint - pivot, axis).magnitude, MinLever);
             _pointMass = InertiaAbout(Body, pivot, axis) / (lever * lever);
 
-            _breakDistance = FromHinge(pivot) * BreakDistanceScale + BreakDistanceSlack;
+            _breakDistance = Interactor.ReachTo(pivot) * BreakDistanceScale + BreakDistanceSlack;
             _unseenTime = 0f;
             _stick = _lastStick = _flick = Vector2.zero;
             _stickSeen = false;
@@ -165,7 +165,9 @@ namespace Sanctify.Interaction
 
             Vector3 axis = Axis;
             Vector3 pivot = Pivot;
-            if (FromHinge(pivot) > _breakDistance)
+            // From a door's hinge line, or a lever's pivot: for the player that's measured flat,
+            // since walking along a level hinge line is still walking away.
+            if (Interactor.ReachTo(pivot) > _breakDistance)
             {
                 ReturnToPrevious(); // walked away
                 return;
@@ -205,16 +207,6 @@ namespace Sanctify.Interaction
             // about 23 kg pushes with less than Door Strength; add a lean-in ramp, as Drag has, if one must shove props
             float force = _pointMass * CatchUpPerStep / deltaTime * gap;
             Body.AddForceAtPosition(swing * Mathf.Clamp(force, -_settings.doorStrength, _settings.doorStrength), point);
-        }
-
-        /// <summary>
-        /// How far the player stands from the hinge, measured flat: from a door's hinge line, or
-        /// from a lever's pivot, since walking along a level hinge line is still walking away.
-        /// </summary>
-        float FromHinge(Vector3 pivot)
-        {
-            Transform player = Interactor.Motor.transform;
-            return Vector3.ProjectOnPlane(player.position - pivot, player.up).magnitude;
         }
 
         public override void Exit()
