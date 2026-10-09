@@ -138,8 +138,30 @@ namespace Sanctify.Magic
         {
             Vector2 m = Vector2.ClampMagnitude(move, 1f);
             Vector3 wanted = _body.rotation * new Vector3(m.x, 0f, m.y) * (topSpeed * _speedMultiplier);
+            wanted = LeashToDrag(wanted);
             Vector3 change = (wanted - _body.linearVelocity) * _settings.response;
             _body.AddForce(Vector3.ClampMagnitude(change, _settings.maxAcceleration), ForceMode.Acceleration);
+        }
+
+        /// <summary>
+        /// While dragging, the hand pulls away from the grabbed point no faster than the point
+        /// follows, plus Drag Creep Speed, as the player walks no faster than what they drag. So it
+        /// hauls light things along, and against something that won't budge it strains slowly
+        /// out until the drag breaks. Moving toward or round the point is free.
+        /// </summary>
+        Vector3 LeashToDrag(Vector3 wanted)
+        {
+            if (Interactor.Current is not GrabState { IsDragging: true } drag
+                || !drag.TryGetGrabPoint(out Vector3 point, out Vector3 pointVelocity))
+                return wanted;
+
+            Vector3 offset = _body.position - point;
+            if (offset.sqrMagnitude < 1e-6f)
+                return wanted;
+            Vector3 away = offset.normalized;
+            float allowed = Mathf.Max(Vector3.Dot(pointVelocity, away), 0f) + _settings.dragCreepSpeed;
+            float wantedAway = Vector3.Dot(wanted, away);
+            return wantedAway > allowed ? wanted - away * (wantedAway - allowed) : wanted;
         }
 
         /// <summary>Visual only: going forward tips the nose down, strafing rolls toward the strafe.</summary>

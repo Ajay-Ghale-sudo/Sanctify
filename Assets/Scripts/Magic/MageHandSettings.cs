@@ -23,6 +23,8 @@ namespace Sanctify.Magic
         [Min(0f)] public float fastSpeed = 2.4f;
         [Tooltip("How quickly the hand closes on the speed it's steered toward, per second. At 3 it gets about 95% of the way in a second, and drifts to a stop when let go.")]
         [Min(0f)] public float response = 3f;
+        [Tooltip("While dragging, how much faster than the grabbed point the hand can pull away from it, in m/s. The object sets the pace; this is the strain. Against something that won't budge, the hand creeps out at this until the drag breaks, about 1.5 s at 0.25.")]
+        [Min(0f)] public float dragCreepSpeed = 0.25f;
         [Tooltip("Hardest it speeds up or brakes, in m/s², so starts stay soft.")]
         [Min(0f)] public float maxAcceleration = 4f;
         [Tooltip("Top turn rate about its own up, in degrees per second. Under the player's 100.")]

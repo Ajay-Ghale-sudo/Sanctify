@@ -31,8 +31,9 @@ namespace Sanctify.Interaction
     /// </summary>
     public sealed class DragState : HeldState
     {
-        const float BreakDistanceScale = 1.2f;
-        const float BreakDistanceSlack = 0.3f;
+        // Shared with a flier dragging with GrabState, so both let go as far from a snag.
+        internal const float BreakDistanceScale = 1.2f;
+        internal const float BreakDistanceSlack = 0.3f;
         // A drag can only start this far into the let-go angle, so it doesn't end as soon as it starts.
         const float TakeHoldAngleShare = 0.75f;
         // How near a pulled object may come to the player before they lead instead of following.

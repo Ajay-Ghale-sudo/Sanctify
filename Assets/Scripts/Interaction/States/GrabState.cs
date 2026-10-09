@@ -80,6 +80,21 @@ namespace Sanctify.Interaction
         /// <summary>How far along the cursor ray the grabbed point actually is, in metres, at the latest physics step.</summary>
         public float PointDepth => _pointDepth;
         public bool CanThrow => _carriesWeight && _data != null && _data.CanThrow;
+        /// <summary>True while dragging something rather than carrying it.</summary>
+        public bool IsDragging => _holding && !_carriesWeight;
+
+        /// <summary>The grabbed point and its velocity at the latest physics step. False once let go.</summary>
+        public bool TryGetGrabPoint(out Vector3 point, out Vector3 velocity)
+        {
+            if (!_holding || Body == null)
+            {
+                point = velocity = default;
+                return false;
+            }
+            point = GrabPoint;
+            velocity = Body.GetPointVelocity(point);
+            return true;
+        }
 
         Vector3 GrabPoint => Body.position + Body.rotation * _localGrabPoint;
         float PullCap => _carriesWeight ? _settings.maxPullForce : _settings.dragStrength;
@@ -157,7 +172,11 @@ namespace Sanctify.Interaction
             Interactor.Body.SpeedMultiplier = _settings.SpeedMultiplierFor(_savedMass);
 
             float startDistance = Vector3.Distance(aim.origin, GrabPoint);
-            _breakDistance = Mathf.Max(startDistance, _data.maxDepth, _depth) * BreakDistanceScale + BreakDistanceSlack;
+            // Dragging lets go as the player's drag does: once the pawn is well away from where it
+            // took hold, which it only gets by straining at something that won't come.
+            _breakDistance = _carriesWeight
+                ? Mathf.Max(startDistance, _data.maxDepth, _depth) * BreakDistanceScale + BreakDistanceSlack
+                : Mathf.Max(startDistance, _depth) * DragState.BreakDistanceScale + DragState.BreakDistanceSlack;
 
             _spinPd.P = Mathf.Min(_settings.spinCatchUp, MaxSpinCatchUpPerStep / Time.fixedDeltaTime);
             _spinPd.D = 0f;
